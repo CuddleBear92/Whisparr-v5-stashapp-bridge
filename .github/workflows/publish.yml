@@ -1,8 +1,8 @@
 name: Publish plugin source
 
 on:
+  # Runs on pushes to any branch, but only the repo's default branch is published.
   push:
-    branches: [main]
     paths:
       - "plugins/**"
       - "build_site.sh"
@@ -20,6 +20,7 @@ concurrency:
 
 jobs:
   build:
+    if: github.ref_name == github.event.repository.default_branch
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

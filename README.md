@@ -78,8 +78,8 @@ only forwards to paths under `/api/` on the configured Whisparr URL.
 ## Publishing (for the repo owner)
 
 `.github/workflows/publish.yml` builds `index.yml` and the plugin zip with
-`build_site.sh` and deploys them to GitHub Pages on every push to `main` that
-touches `plugins/`. Enable it once under **Settings › Pages › Build and
+`build_site.sh` and deploys them to GitHub Pages on every push to the repo's default branch
+that touches `plugins/` (or when run by hand from the Actions tab). Enable it once under **Settings › Pages › Build and
 deployment › Source: GitHub Actions**.
 
 Bump `version:` in `plugins/WhisparrBridge/WhisparrBridge.yml` for each release;
