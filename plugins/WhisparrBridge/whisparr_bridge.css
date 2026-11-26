@@ -1,0 +1,157 @@
+.wb-panel {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  margin: 0.75rem 0;
+  background: rgba(0, 0, 0, 0.15);
+  font-size: 0.9rem;
+}
+
+.wb-header {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  user-select: none;
+}
+
+.wb-header:focus {
+  outline: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+.wb-caret {
+  width: 1em;
+}
+
+.wb-title {
+  font-weight: 600;
+}
+
+.wb-summary {
+  align-items: center;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.wb-body {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 0.75rem;
+}
+
+.wb-pill {
+  border-radius: 999px;
+  display: inline-block;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  margin-right: 0.25rem;
+  padding: 0 0.55rem;
+}
+
+.wb-pill-on {
+  background: rgba(40, 167, 69, 0.25);
+  color: #7ee2a0;
+}
+
+.wb-pill-off {
+  background: rgba(255, 255, 255, 0.1);
+  color: #c0c6cc;
+}
+
+.wb-status {
+  display: grid;
+  gap: 0.3rem;
+  margin-bottom: 0.75rem;
+}
+
+.wb-row {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.wb-label {
+  color: #9aa3ab;
+  flex: 0 0 9.5rem;
+}
+
+.wb-value {
+  overflow-wrap: anywhere;
+}
+
+.wb-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.wb-grow {
+  flex: 1 1 auto;
+}
+
+.wb-form {
+  max-width: 34rem;
+}
+
+.wb-form .form-group {
+  margin-bottom: 0.6rem;
+}
+
+.wb-form .form-label {
+  margin-bottom: 0.2rem;
+}
+
+.wb-switch .form-text {
+  margin-top: 0;
+  padding-left: 2.25rem;
+}
+
+.wb-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.wb-tag {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+  color: inherit;
+  font-size: 0.8rem;
+  padding: 0.1rem 0.5rem;
+}
+
+.wb-tag-on {
+  background: rgba(19, 124, 189, 0.45);
+  border-color: rgba(19, 124, 189, 0.9);
+}
+
+.wb-warning,
+.wb-error {
+  border-radius: 4px;
+  margin-bottom: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  white-space: pre-line;
+}
+
+.wb-warning {
+  background: rgba(255, 193, 7, 0.12);
+  color: #f3d57a;
+}
+
+.wb-error {
+  background: rgba(220, 53, 69, 0.15);
+  color: #f19ca4;
+}
+
+.wb-panel-scene {
+  margin-top: 0;
+}
+
+@media (max-width: 576px) {
+  .wb-label {
+    flex-basis: 7rem;
+  }
+}

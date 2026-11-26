@@ -1,0 +1,58 @@
+name: Whisparr Bridge
+description: Shows and manages performers, studios and scenes in Whisparr v5 from their Stash pages.
+version: 0.1.0
+url: https://github.com/CuddleBear92/Whisparr-v5-stashapp-bridge
+
+ui:
+  javascript:
+    - whisparr_bridge.js
+  css:
+    - whisparr_bridge.css
+
+# Requests to Whisparr are relayed through whisparr_proxy.py on the Stash
+# server. Stash's Content-Security-Policy blocks the browser from calling
+# other hosts directly, and relaying also works when Whisparr is only reachable
+# from the Stash host (for example a Docker container name).
+exec:
+  - python
+  - "{pluginDir}/whisparr_proxy.py"
+interface: raw
+errLog: error
+
+settings:
+  whisparrHost:
+    displayName: Whisparr host
+    description: IP address or hostname of the Whisparr v5 server, as seen from the Stash server, e.g. 192.168.1.20, whisparr or https://whisparr.example.com
+    type: STRING
+  whisparrPort:
+    displayName: Whisparr port
+    description: Port of the Whisparr server. Leave at 0 to use the default (6969), or the scheme's default when the host starts with https://
+    type: NUMBER
+  whisparrUrlBase:
+    displayName: Whisparr URL base (optional)
+    description: Only if Whisparr is set up with a URL base (Settings > General > URL Base), e.g. /whisparr
+    type: STRING
+  whisparrApiKey:
+    displayName: Whisparr API key
+    description: Found in Whisparr under Settings > General > Security
+    type: STRING
+  useTpdb:
+    displayName: Whisparr uses ThePornDB
+    description: Turn on if your Whisparr scene metadata source is ThePornDB. Leave off for StashDB. The plugin matches items using the Stash ID from this stash-box.
+    type: BOOLEAN
+  whisparrPublicUrl:
+    displayName: Whisparr link URL (optional)
+    description: Address your browser uses to open Whisparr, for the "Open in Whisparr" links, if it differs from the host above, e.g. http://192.168.1.20:6969
+    type: STRING
+  disablePerformers:
+    displayName: Off on performer pages
+    description: Hide the Whisparr panel on performer pages
+    type: BOOLEAN
+  disableStudios:
+    displayName: Off on studio pages
+    description: Hide the Whisparr panel on studio pages
+    type: BOOLEAN
+  disableScenes:
+    displayName: Off on scene pages
+    description: Hide the Whisparr tab on scene pages
+    type: BOOLEAN
