@@ -296,6 +296,20 @@ def path_candidates(stash_path, pairs, records):
     return unique
 
 
+def whisparr_sees(base, api_key, path, movie_id):
+    """Whisparr's manual-import item for this exact file path, or None."""
+    items = whisparr(
+        base,
+        api_key,
+        "GET",
+        "/manualimport?folder=%s&movieId=%d&filterExistingFiles=false" % (urllib.parse.quote(path), movie_id),
+    ) or []
+    found = next((i for i in items if _norm(i.get("path")) == _norm(path)), None)
+    if found is None and len(items) == 1:
+        found = items[0]
+    return found
+
+
 def learned_pair(stash_path, whisparr_path):
     """The differing prefixes of two paths to the same file, e.g. ('/media/dl', '/downloads')."""
     a, b = _norm(stash_path).split("/"), _norm(whisparr_path).split("/")
@@ -431,8 +445,22 @@ def import_scene(conn, scene_id, log, progress):
     download_id = None
     tried = []
     file_name = _name(stash_path)
-    matches = queue_matches(stash_path, records)
-    log("i", "%d item(s) in Whisparr's queue; %d look like this file's download" % (len(records), len(matches)))
+
+    # 1. A path mapping (Stash path => Whisparr path) gives the path directly.
+    mapped = to_whisparr(stash_path, pairs)
+    if mapped != stash_path:
+        tried.append(mapped)
+        found = whisparr_sees(base, api_key, mapped, movie["id"])
+        if found is not None:
+            path, item = mapped, found
+            log("i", "Whisparr sees the file as %s (from your path mappings)" % path)
+        else:
+            log("w", "Your path mappings give %s, but Whisparr can't see a file there" % mapped)
+
+    # 2. The file's own download in Activity > Queue (Whisparr lists its files itself).
+    matches = queue_matches(stash_path, records) if item is None else []
+    if item is None:
+        log("i", "%d item(s) in Whisparr's queue; %d look like this file's download" % (len(records), len(matches)))
     for rec in matches:
         tried.append("download " + str(rec.get("title") or rec.get("downloadId")))
         log("i", "Asking Whisparr for the files of download %s" % (rec.get("title") or rec.get("downloadId")))
@@ -449,18 +477,11 @@ def import_scene(conn, scene_id, log, progress):
             path, item, download_id = found.get("path"), found, rec["downloadId"]
             log("i", "Found the file in Whisparr's queue: %s (download %s)" % (path, rec.get("title")))
             break
-    candidates = [] if item is not None else path_candidates(stash_path, pairs, records)
+    # 3. Other likely paths (queue download folders, the same path as Stash).
+    candidates = [] if item is not None else [c for c in path_candidates(stash_path, pairs, records) if c[0] not in tried]
     for candidate, how in candidates:
         tried.append(candidate)
-        items = whisparr(
-            base,
-            api_key,
-            "GET",
-            "/manualimport?folder=%s&movieId=%d&filterExistingFiles=false" % (urllib.parse.quote(candidate), movie["id"]),
-        ) or []
-        found = next((i for i in items if _norm(i.get("path")) == _norm(candidate)), None)
-        if found is None and len(items) == 1:
-            found = items[0]
+        found = whisparr_sees(base, api_key, candidate, movie["id"])
         if found is not None:
             path, item = candidate, found
             log("i", "Whisparr sees the file as %s (found via %s)" % (path, how))

@@ -146,11 +146,11 @@ have a file for it yet, a background job (visible in Stash's job queue):
 
 1. adds the scene to Whisparr if needed (root folder/profile from the settings
    window) and monitors it, if that's on;
-2. finds the file as Whisparr sees it: first through its Activity › Queue
-   download (Whisparr lists that download's files itself; the file name must
-   match exactly), then your **path mappings** (Import tagged scenes › Edit ›
-   Path mappings, `Stash path => Whisparr path` per line), then the same path
-   as Stash;
+2. finds the file as Whisparr sees it: first your **path mappings** (Import
+   tagged scenes › Edit › Path mappings, `Stash path => Whisparr path` per line;
+   one line for the download folder is enough), then the file's own download in
+   Activity › Queue (Whisparr lists that download's files itself; the name must
+   match exactly), then the same path as Stash;
 3. checks the file with Whisparr's manual import for that scene, and stops with
    Whisparr's reason if it would refuse it (e.g. not an upgrade);
 4. imports it with **move**, so Whisparr renames and moves it as usual, and
