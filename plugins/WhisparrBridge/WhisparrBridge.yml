@@ -1,6 +1,6 @@
 name: Whisparr Bridge
 description: Shows and manages performers, studios and scenes in Whisparr v5 from their Stash pages.
-version: 0.2.0
+version: 0.3.0
 url: https://github.com/CuddleBear92/Whisparr-v5-stashapp-bridge
 
 ui:
@@ -18,6 +18,12 @@ exec:
   - "{pluginDir}/whisparr_proxy.py"
 interface: raw
 errLog: error
+
+tasks:
+  - name: Sync Whisparr Watched tags
+    description: Tags every performer, studio and scene that is monitored in Whisparr with the watched tag, and untags the rest.
+    defaultArgs:
+      mode: syncTags
 
 settings:
   whisparrHost:
@@ -44,17 +50,35 @@ settings:
     displayName: Whisparr link URL (optional)
     description: Address your browser uses to open Whisparr, for the "Open in Whisparr" links, if it differs from the host above, e.g. http://192.168.1.20:6969
     type: STRING
+  presetMonitorScenes:
+    displayName: "Preset: Monitor scenes"
+    description: Value the "Apply preset" button sets on a performer or studio. The four preset toggles are only applied once at least one of them has been saved.
+    type: BOOLEAN
+  presetMonitorMovies:
+    displayName: "Preset: Monitor movies"
+    description: Needs a TMDB/TPDB link on the stash-box. If Whisparr refuses it, the rest of the preset is still applied.
+    type: BOOLEAN
+  presetMonitorNewItems:
+    displayName: "Preset: Monitor new items"
+    type: BOOLEAN
+  presetSearchOnAdd:
+    displayName: "Preset: Search on add"
+    type: BOOLEAN
   yearPreset:
-    displayName: Year preset
-    description: 'Years the "Apply year preset" button monitors on performer and studio pages. Examples - all, 2020+, 2018-2022, -2015, last 5, or a mix like "2015, 2019-2021". Empty means all years.'
+    displayName: "Preset: years to monitor"
+    description: 'Years "Apply preset" monitors. Examples - all, none, 2020+, 2018-2022, -2015, last 5, or a mix like "2015, 2019-2021". Empty means all years; none leaves years alone.'
     type: STRING
   yearPresetUnmonitorOthers:
-    displayName: Year preset unmonitors other years
+    displayName: "Preset: unmonitor other years"
     description: When on, applying the preset also unmonitors works from years outside it. When off, it only adds monitoring.
     type: BOOLEAN
-  yearPresetMonitorItem:
-    displayName: Year preset monitors the performer/studio
-    description: When on, applying the preset also turns on Monitored and Monitor new items for the performer or studio.
+  watchedTagName:
+    displayName: Watched tag name
+    description: Stash tag kept on performers, studios and scenes that are monitored in Whisparr. Empty means "Whisparr Watched".
+    type: STRING
+  disableWatchedTag:
+    displayName: Don't manage the watched tag
+    description: Turn on to stop the plugin from adding or removing the watched tag.
     type: BOOLEAN
   disablePerformers:
     displayName: Off on performer pages

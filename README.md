@@ -29,9 +29,10 @@ Editing options:
 - **Years** (performers/studios): every year Whisparr has works for, with monitored
   and on-disk counts, and a switch per year. Like the bookmarks on Whisparr's own
   studio/performer pages, switching a year on monitors every work from that year.
-- **Apply year preset** (performers/studios): one button that monitors the years
-  set in the plugin's **Year preset** setting. It shows exactly what will change
-  before applying.
+- **Apply preset** (performers/studios): one button that sets the watch settings
+  (Monitor scenes, Monitor movies, Monitor new items, Search on add) and the
+  monitored years to the preset from the plugin settings. It lists exactly what
+  will change before applying. The **Add** form also starts from the preset.
 - **Remove**, optionally deleting files and adding an import exclusion. Removing a
   performer or studio removes all of its scenes from Whisparr too.
 
@@ -68,13 +69,30 @@ Copy the `plugins/WhisparrBridge` folder into your Stash `plugins` folder
 | Whisparr API key | Required. |
 | Whisparr uses ThePornDB | Off = StashDB. The panel warns if this doesn't match what Whisparr reports. |
 | Whisparr link URL | Optional. Address your *browser* uses for the "Open in Whisparr" link, if different from the host above. |
-| Year preset | Years the **Apply year preset** button monitors: `all` (or empty), `2020+`, `2018-2022`, `-2015` (up to 2015), `last 5` (this year and the 4 before), or a mix like `2015, 2019-2021`. |
-| Year preset unmonitors other years | Also unmonitor works from years outside the preset. Off = the preset only adds monitoring. |
-| Year preset monitors the performer/studio | Also turn on Monitored and Monitor new items when applying the preset. |
+| Preset: Monitor scenes / Monitor movies / Monitor new items / Search on add | What **Apply preset** sets on a performer or studio. Until you save at least one of these four, the preset leaves the watch settings alone (Stash shows unsaved toggles as off). If Whisparr refuses Monitor movies (it needs a TMDB/TPDB link), the rest is still applied. |
+| Preset: years to monitor | `all` (or empty), `none` (leave years alone), `2020+`, `2018-2022`, `-2015` (up to 2015), `last 5` (this year and the 4 before), or a mix like `2015, 2019-2021`. |
+| Preset: unmonitor other years | Also unmonitor works from years outside the preset. Off = the preset only adds monitoring. |
+| Watched tag name | Stash tag for things monitored in Whisparr. Empty = `Whisparr Watched`. |
+| Don't manage the watched tag | Stops the plugin adding/removing the tag. |
 | Off on performer / studio / scene pages | Hide the plugin on that kind of page. |
 
 To turn the whole plugin off, use the enable switch Stash shows next to each
 plugin under **Settings › Plugins**.
+
+## The "Whisparr Watched" tag
+
+The plugin keeps a Stash tag (default **Whisparr Watched**) on every performer,
+studio and scene that is monitored in Whisparr, and takes it off ones that are
+not, so you can filter for them in Stash. The tag is created the first time it's
+needed.
+
+- Opening a performer, studio or scene page updates that item's tag.
+- **Settings › Tasks › Plugin Tasks › Sync Whisparr Watched tags** goes through
+  your whole library. Run it once after installing, and again whenever you want
+  everything caught up (it can also be scheduled like any Stash task).
+
+Items without a Stash ID from Whisparr's stash-box are never tagged. If you
+rename the tag in the settings, the old tag is left as it is.
 
 ## How it talks to Whisparr
 

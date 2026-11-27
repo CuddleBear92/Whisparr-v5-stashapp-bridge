@@ -17,6 +17,9 @@ It prints {"output": {"status": <int>, "body": <parsed JSON or text>}}.
 HTTP errors from Whisparr are returned the same way, so the UI can show
 Whisparr's own validation messages. Only network/setup problems use "error".
 
+With args {"mode": "syncTags"} (the "Sync Whisparr Watched tags" task) it
+runs whisparr_tasks.sync_watched_tags instead.
+
 Standard library only, so it runs on any Python 3 that Stash can find.
 """
 
@@ -61,6 +64,16 @@ def main():
         return
 
     args = payload.get("args") or {}
+    if args.get("mode") == "syncTags":
+        import whisparr_tasks
+
+        try:
+            respond(whisparr_tasks.sync_watched_tags(payload.get("server_connection") or {}, log))
+        except Exception as e:  # report any failure on the Tasks page / log
+            log("e", "Tag sync failed: %s" % e)
+            respond(error="Tag sync failed: %s" % e)
+        return
+
     base = str(args.get("url") or "").rstrip("/")
     api_key = str(args.get("apiKey") or "")
     method = str(args.get("method") or "GET").upper()
