@@ -296,13 +296,18 @@ def path_candidates(stash_path, pairs, records):
     return unique
 
 
-def whisparr_sees(base, api_key, path, movie_id):
-    """Whisparr's manual-import item for this exact file path, or None."""
+def whisparr_sees(base, api_key, path, movie_id=None):
+    """Whisparr's manual-import item for this exact file path, or None.
+
+    No movieId here: given a movieId without a downloadId, Whisparr's
+    /manualimport ignores the folder and lists that scene's existing files.
+    The scene is applied afterwards (POST /manualimport), which also checks the
+    file against it."""
     items = whisparr(
         base,
         api_key,
         "GET",
-        "/manualimport?folder=%s&movieId=%d&filterExistingFiles=false" % (urllib.parse.quote(path), movie_id),
+        "/manualimport?folder=%s&filterExistingFiles=false" % urllib.parse.quote(path),
     ) or []
     found = next((i for i in items if _norm(i.get("path")) == _norm(path)), None)
     if found is None and len(items) == 1:
@@ -497,6 +502,18 @@ def import_scene(conn, scene_id, log, progress):
     if pair and pair not in pairs:
         pairs = pairs + [pair]
     download_id = download_id or queue_download_id(records, path)
+    if not download_id:
+        # The download named after this file, when its folder doesn't say (e.g. the
+        # client reports a shared save folder for single-file downloads).
+        stem = posixpath.splitext(file_name)[0]
+        named = [
+            r
+            for r in records
+            if r.get("downloadId")
+            and ((r.get("title") or "").strip() in (file_name, stem) or _name(r.get("outputPath")) == file_name)
+        ]
+        if len(named) == 1:
+            download_id = named[0]["downloadId"]
     log("i", "Importing %s as %s%s" % (path, movie.get("title"), " (download %s)" % download_id if download_id else ""))
 
     # Re-check the file against this scene (quality, upgrade rules, ...).
