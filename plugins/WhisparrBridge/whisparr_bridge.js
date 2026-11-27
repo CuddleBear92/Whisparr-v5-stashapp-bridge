@@ -82,6 +82,9 @@
       publicUrl,
       apiKey: String(raw.whisparrApiKey || "").trim(),
       box: raw.useTpdb ? "tpdb" : "stashdb",
+      yearPreset: String(raw.yearPreset || "").trim(),
+      yearPresetUnmonitorOthers: !!raw.yearPresetUnmonitorOthers,
+      yearPresetMonitorItem: !!raw.yearPresetMonitorItem,
       disabled: {
         performer: !!raw.disablePerformers,
         studio: !!raw.disableStudios,
@@ -180,6 +183,7 @@
       // makes it visible again when it is added.
       exists: (item) => item && item.visibility !== "hidden",
       hasChildren: true,
+      worksPath: (item) => "/performer/" + encodeURIComponent(item.foreignId) + "/works",
       deleteWarning:
         "This removes the performer and every scene/movie Whisparr has for them.",
     },
@@ -194,6 +198,7 @@
       refreshCommand: (item) => ({ name: "RefreshStudios", studioIds: [item.id] }),
       exists: (item) => !!item,
       hasChildren: true,
+      worksPath: (item) => "/studio/" + encodeURIComponent(item.foreignId) + "/works",
       deleteWarning: "This removes the studio and every scene/movie Whisparr has for it.",
     },
     scene: {
@@ -606,6 +611,280 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Years (per-year monitoring, like the bookmarks on Whisparr's studio/performer pages)
+  // ---------------------------------------------------------------------------
+
+  // Parses the "Year preset" setting into a test function.
+  // Accepts: empty or "all", "2020", "2018-2022", "2020+" or "2020-", "-2015",
+  // "last 5" (this year and the 4 before it), and comma/space separated mixes.
+  function parseYearPreset(text) {
+    const raw = String(text || "").trim().toLowerCase();
+    if (!raw || raw === "all" || raw === "*") return { label: "all years", test: () => true };
+
+    const thisYear = new Date().getFullYear();
+    const ranges = [];
+    const parts = raw.replace(/last\s+(\d+)/g, "last:$1").split(/[\s,;]+/).filter(Boolean);
+    for (const part of parts) {
+      let m;
+      if ((m = part.match(/^last:(\d+)$/))) {
+        const n = Number(m[1]);
+        if (!n) throw new Error('"last 0" matches no years');
+        ranges.push([thisYear - n + 1, Infinity]);
+      } else if ((m = part.match(/^(\d{4})$/))) {
+        ranges.push([Number(m[1]), Number(m[1])]);
+      } else if ((m = part.match(/^(\d{4})-(\d{4})$/))) {
+        const a = Number(m[1]);
+        const b = Number(m[2]);
+        ranges.push([Math.min(a, b), Math.max(a, b)]);
+      } else if ((m = part.match(/^(\d{4})(\+|-)$/))) {
+        ranges.push([Number(m[1]), Infinity]);
+      } else if ((m = part.match(/^-(\d{4})$/))) {
+        ranges.push([-Infinity, Number(m[1])]);
+      } else {
+        throw new Error('Year preset "' + text + '" is not understood at "' + part + '"');
+      }
+    }
+    return {
+      label: text.trim(),
+      test: (year) => ranges.some(([a, b]) => year >= a && year <= b),
+    };
+  }
+
+  function groupWorksByYear(works) {
+    const byYear = new Map();
+    for (const w of works || []) {
+      if (!w || !w.year) continue; // Whisparr leaves undated works out of its year list too
+      if (!byYear.has(w.year)) byYear.set(w.year, []);
+      byYear.get(w.year).push(w);
+    }
+    return Array.from(byYear.entries())
+      .sort((a, b) => b[0] - a[0])
+      .map(([year, list]) => ({
+        year,
+        works: list,
+        total: list.length,
+        monitored: list.filter((w) => w.monitored).length,
+        onDisk: list.filter((w) => w.hasFile).length,
+        size: list.reduce((n, w) => n + (w.sizeOnDisk || 0), 0),
+      }));
+  }
+
+  function setMonitored(settings, ids, monitored) {
+    if (!ids.length) return Promise.resolve();
+    return whisparr(settings, "PATCH", "/movie/bulk/monitor?monitored=" + monitored, ids);
+  }
+
+  // Works the preset would change: [toMonitor, toUnmonitor], each a list of {year, ids}.
+  function planPreset(years, preset, unmonitorOthers) {
+    const on = [];
+    const off = [];
+    for (const y of years) {
+      if (preset.test(y.year)) {
+        const ids = y.works.filter((w) => !w.monitored).map((w) => w.id);
+        if (ids.length) on.push({ year: y.year, ids });
+      } else if (unmonitorOthers) {
+        const ids = y.works.filter((w) => w.monitored).map((w) => w.id);
+        if (ids.length) off.push({ year: y.year, ids });
+      }
+    }
+    return [on, off];
+  }
+
+  function describeYears(list) {
+    const years = list.map((x) => x.year).sort((a, b) => a - b);
+    // Collapse runs: 2018, 2019, 2020 -> 2018-2020
+    const out = [];
+    let start = null;
+    let prev = null;
+    for (const y of years.concat([null])) {
+      if (start !== null && y === prev + 1) {
+        prev = y;
+        continue;
+      }
+      if (start !== null) out.push(start === prev ? String(start) : start + "-" + prev);
+      start = y;
+      prev = y;
+    }
+    return out.join(", ");
+  }
+
+  function YearsView({ kind, settings, item, showPreset, onChanged, onClose }) {
+    const k = KINDS[kind];
+    const Toast = PluginApi.hooks.useToast ? PluginApi.hooks.useToast() : null;
+    const [years, setYears] = useState(null);
+    const [error, setError] = useState(null);
+    const [busyYear, setBusyYear] = useState(null);
+    const [applying, setApplying] = useState(false);
+    const [loadKey, setLoadKey] = useState(0);
+    const [presetOpen, setPresetOpen] = useState(!!showPreset);
+
+    useEffect(() => {
+      let cancelled = false;
+      setError(null);
+      whisparr(settings, "GET", k.worksPath(item)).then(
+        (works) => !cancelled && setYears(groupWorksByYear(works)),
+        (err) => !cancelled && setError(err.message)
+      );
+      return () => {
+        cancelled = true;
+      };
+    }, [loadKey]);
+
+    let preset = null;
+    let presetError = null;
+    try {
+      preset = parseYearPreset(settings.yearPreset);
+    } catch (err) {
+      presetError = err.message;
+    }
+
+    async function toggleYear(y, monitored) {
+      setBusyYear(y.year);
+      try {
+        await setMonitored(settings, y.works.map((w) => w.id), monitored);
+        setLoadKey((n) => n + 1);
+        onChanged();
+      } catch (err) {
+        if (Toast) Toast.error(err);
+        else alert(err.message);
+      } finally {
+        setBusyYear(null);
+      }
+    }
+
+    async function applyPreset(on, off) {
+      setApplying(true);
+      try {
+        const ids = (list) => [].concat.apply([], list.map((x) => x.ids));
+        await setMonitored(settings, ids(on), true);
+        await setMonitored(settings, ids(off), false);
+        if (settings.yearPresetMonitorItem && (!item.monitored || !item.whisparrMonitorNewItems)) {
+          await whisparr(
+            settings,
+            "PUT",
+            k.resource + "/" + item.id,
+            Object.assign({}, item, { monitored: true, whisparrMonitorNewItems: true })
+          );
+        }
+        if (Toast) Toast.success("Year preset applied");
+        setPresetOpen(false);
+        setLoadKey((n) => n + 1);
+        onChanged();
+      } catch (err) {
+        if (Toast) Toast.error(err);
+        else alert(err.message);
+      } finally {
+        setApplying(false);
+      }
+    }
+
+    if (error) {
+      return h(
+        Fragment,
+        null,
+        h("div", { className: "wb-error" }, error),
+        h(
+          "div",
+          { className: "wb-actions" },
+          h(Button, { size: "sm", variant: "secondary", onClick: () => setLoadKey((n) => n + 1) }, "Retry"),
+          h(Button, { size: "sm", variant: "secondary", onClick: onClose }, "Back")
+        )
+      );
+    }
+    if (!years) {
+      return h("div", { className: "wb-loading" }, h(Spinner, { animation: "border", size: "sm" }), " Loading works from Whisparr…");
+    }
+
+    // ---- preset confirmation
+    let presetBox = null;
+    if (presetOpen) {
+      if (presetError) {
+        presetBox = h("div", { className: "wb-error" }, presetError + ". Fix it under Settings > Plugins > Whisparr Bridge.");
+      } else {
+        const [on, off] = planPreset(years, preset, settings.yearPresetUnmonitorOthers);
+        const count = (list) => list.reduce((n, x) => n + x.ids.length, 0);
+        const itemChange =
+          settings.yearPresetMonitorItem && (!item.monitored || !item.whisparrMonitorNewItems)
+            ? "Turn on Monitored and Monitor new items for this " + k.label + "."
+            : null;
+        const lines = [];
+        if (on.length) lines.push("Monitor " + count(on) + " works in " + describeYears(on) + ".");
+        if (off.length) lines.push("Unmonitor " + count(off) + " works in " + describeYears(off) + ".");
+        if (itemChange) lines.push(itemChange);
+        presetBox = h(
+          "div",
+          { className: "wb-preset" },
+          h(
+            "div",
+            { className: "wb-preset-title" },
+            "Year preset: ",
+            h("strong", null, preset.label),
+            settings.yearPresetUnmonitorOthers ? " (other years are unmonitored)" : null
+          ),
+          lines.length
+            ? h("ul", { className: "wb-preset-list" }, lines.map((l, i) => h("li", { key: i }, l)))
+            : h("div", { className: "text-muted" }, "Nothing to change. This " + k.label + " already matches the preset."),
+          h(
+            "div",
+            { className: "wb-actions" },
+            lines.length
+              ? h(
+                  Button,
+                  { variant: "primary", size: "sm", disabled: applying, onClick: () => applyPreset(on, off) },
+                  applying ? h(Spinner, { animation: "border", size: "sm" }) : "Apply"
+                )
+              : null,
+            h(Button, { variant: "secondary", size: "sm", disabled: applying, onClick: () => setPresetOpen(false) }, lines.length ? "Cancel" : "OK")
+          )
+        );
+      }
+    }
+
+    const rows = years.length
+      ? years.map((y) =>
+          h(
+            "div",
+            { key: y.year, className: "wb-year" },
+            h("span", { className: "wb-year-name" }, y.year),
+            h(
+              "span",
+              {
+                className: "wb-year-count " + (y.monitored === y.total ? "wb-full" : y.monitored ? "wb-partial" : ""),
+                title: "Monitored / total works",
+              },
+              y.monitored + " / " + y.total + " monitored"
+            ),
+            h("span", { className: "wb-year-disk", title: "Works on disk" }, y.onDisk + " on disk" + (y.size ? " · " + formatBytes(y.size) : "")),
+            busyYear === y.year
+              ? h(Spinner, { animation: "border", size: "sm" })
+              : h(Form.Check, {
+                  type: "switch",
+                  id: "wb-year-" + kind + "-" + y.year,
+                  label: h("span", { className: "sr-only" }, "Monitor " + y.year),
+                  checked: y.monitored === y.total,
+                  disabled: busyYear !== null || applying,
+                  onChange: (e) => toggleYear(y, e.target.checked),
+                })
+          )
+        )
+      : h("div", { className: "text-muted" }, "Whisparr has no dated works for this " + k.label + " yet.");
+
+    return h(
+      Fragment,
+      null,
+      presetBox,
+      h(
+        "div",
+        { className: "wb-actions wb-years-head" },
+        h("span", { className: "wb-grow text-muted" }, "Switching a year on monitors every work from that year."),
+        presetOpen ? null : h(Button, { variant: "primary", size: "sm", disabled: applying, onClick: () => setPresetOpen(true) }, "Apply year preset"),
+        h(Button, { variant: "secondary", size: "sm", onClick: onClose }, "Back")
+      ),
+      h("div", { className: "wb-years" }, rows)
+    );
+  }
+
+  // ---------------------------------------------------------------------------
   // Status view
   // ---------------------------------------------------------------------------
 
@@ -825,6 +1104,15 @@
               ? h(EditForm, { kind, settings, meta, item, onSaved: reload, onCancel: () => setMode("view") })
               : mode === "delete"
               ? h(DeleteForm, { kind, settings, item, onDeleted: reload, onCancel: () => setMode("view") })
+              : mode === "years" || mode === "preset"
+              ? h(YearsView, {
+                  kind,
+                  settings,
+                  item,
+                  showPreset: mode === "preset",
+                  onChanged: () => setReloadKey((n) => n + 1),
+                  onClose: () => setMode("view"),
+                })
               : h(
                   Fragment,
                   null,
@@ -833,6 +1121,16 @@
                     "div",
                     { className: "wb-actions" },
                     h(Button, { variant: "primary", size: "sm", onClick: () => setMode("edit") }, "Edit"),
+                    k.hasChildren
+                      ? h(Button, { variant: "secondary", size: "sm", onClick: () => setMode("years") }, "Years")
+                      : null,
+                    k.hasChildren
+                      ? h(
+                          Button,
+                          { variant: "secondary", size: "sm", onClick: () => setMode("preset"), title: "Monitor years using the preset from the plugin settings" },
+                          "Apply year preset"
+                        )
+                      : null,
                     h(
                       Button,
                       {

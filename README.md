@@ -26,6 +26,12 @@ Editing options:
 - **Only items released on or after** (performers/studios): a date cut-off.
 - **Quality profile**, **root folder** (when adding) and **tags**.
 - **Start search after adding**.
+- **Years** (performers/studios): every year Whisparr has works for, with monitored
+  and on-disk counts, and a switch per year. Like the bookmarks on Whisparr's own
+  studio/performer pages, switching a year on monitors every work from that year.
+- **Apply year preset** (performers/studios): one button that monitors the years
+  set in the plugin's **Year preset** setting. It shows exactly what will change
+  before applying.
 - **Remove**, optionally deleting files and adding an import exclusion. Removing a
   performer or studio removes all of its scenes from Whisparr too.
 
@@ -62,6 +68,9 @@ Copy the `plugins/WhisparrBridge` folder into your Stash `plugins` folder
 | Whisparr API key | Required. |
 | Whisparr uses ThePornDB | Off = StashDB. The panel warns if this doesn't match what Whisparr reports. |
 | Whisparr link URL | Optional. Address your *browser* uses for the "Open in Whisparr" link, if different from the host above. |
+| Year preset | Years the **Apply year preset** button monitors: `all` (or empty), `2020+`, `2018-2022`, `-2015` (up to 2015), `last 5` (this year and the 4 before), or a mix like `2015, 2019-2021`. |
+| Year preset unmonitors other years | Also unmonitor works from years outside the preset. Off = the preset only adds monitoring. |
+| Year preset monitors the performer/studio | Also turn on Monitored and Monitor new items when applying the preset. |
 | Off on performer / studio / scene pages | Hide the plugin on that kind of page. |
 
 To turn the whole plugin off, use the enable switch Stash shows next to each

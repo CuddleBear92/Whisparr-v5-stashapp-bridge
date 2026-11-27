@@ -155,3 +155,80 @@
     flex-basis: 7rem;
   }
 }
+
+.wb-loading {
+  align-items: center;
+  display: flex;
+  gap: 0.5rem;
+}
+
+.wb-years-head {
+  margin: 0 0 0.5rem;
+}
+
+.wb-years {
+  display: grid;
+  gap: 0.15rem;
+  max-height: 26rem;
+  overflow-y: auto;
+}
+
+.wb-year {
+  align-items: center;
+  border-radius: 4px;
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: 3.5rem 10rem 1fr auto;
+  padding: 0.2rem 0.5rem;
+}
+
+.wb-year:nth-child(odd) {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.wb-year-name {
+  font-weight: 600;
+}
+
+.wb-year-count {
+  color: #c0c6cc;
+}
+
+.wb-year-count.wb-partial {
+  color: #f3d57a;
+}
+
+.wb-year-count.wb-full {
+  color: #7ee2a0;
+}
+
+.wb-year-disk {
+  color: #9aa3ab;
+}
+
+.wb-year .custom-switch {
+  min-height: 1.25rem;
+}
+
+.wb-preset {
+  background: rgba(19, 124, 189, 0.12);
+  border: 1px solid rgba(19, 124, 189, 0.5);
+  border-radius: 4px;
+  margin-bottom: 0.75rem;
+  padding: 0.5rem 0.75rem;
+}
+
+.wb-preset-list {
+  margin: 0.35rem 0;
+  padding-left: 1.25rem;
+}
+
+@media (max-width: 576px) {
+  .wb-year {
+    grid-template-columns: 3rem 1fr auto;
+  }
+
+  .wb-year-disk {
+    display: none;
+  }
+}
