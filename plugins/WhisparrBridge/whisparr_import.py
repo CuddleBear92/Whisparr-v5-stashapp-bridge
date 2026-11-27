@@ -245,18 +245,29 @@ def queue_download_id(records, path):
     return best
 
 
+MAX_QUEUE_LOOKUPS = 5
+
+
 def queue_matches(stash_path, records):
-    """Queue items that look like this file's download: the output (or its title) is the
-    file itself or the folder it sits in."""
+    """Queue items that are this file's download, best first:
+    1. the download is the file itself (its name or output is the file name),
+    2. a folder download named after the file's own folder.
+    A shared download folder (many single-file downloads in one place) never
+    counts: its name says nothing about which download this file is."""
     file_name = _name(stash_path)
     stem = posixpath.splitext(file_name)[0]
     parent_name = _name(posixpath.dirname(_norm(stash_path)))
-    out = []
+    exact, folder = [], []
     for rec in records:
-        names = {_name(rec.get("outputPath")), (rec.get("title") or "").strip()}
-        if names & {file_name, stem, parent_name} and rec.get("downloadId"):
-            out.append(rec)
-    return out
+        if not rec.get("downloadId"):
+            continue
+        title = (rec.get("title") or "").strip()
+        out_name = _name(rec.get("outputPath"))
+        if out_name == file_name or title in (file_name, stem):
+            exact.append(rec)
+        elif parent_name and out_name == parent_name and title == parent_name:
+            folder.append(rec)
+    return (exact + folder)[:MAX_QUEUE_LOOKUPS]
 
 
 def path_candidates(stash_path, pairs, records):
@@ -420,8 +431,11 @@ def import_scene(conn, scene_id, log, progress):
     download_id = None
     tried = []
     file_name = _name(stash_path)
-    for rec in queue_matches(stash_path, records):
+    matches = queue_matches(stash_path, records)
+    log("i", "%d item(s) in Whisparr's queue; %d look like this file's download" % (len(records), len(matches)))
+    for rec in matches:
         tried.append("download " + str(rec.get("title") or rec.get("downloadId")))
+        log("i", "Asking Whisparr for the files of download %s" % (rec.get("title") or rec.get("downloadId")))
         items = whisparr(
             base,
             api_key,
