@@ -88,6 +88,7 @@
       presetAskFirst: !!raw.presetAskFirst,
       flagPreset: isPresetEnabled(raw) ? readFlagPreset(raw) : null,
       tagEnabled: !raw.disableWatchedTag,
+      onSceneDelete: ["unmonitor", "exclude"].includes(raw.onSceneDelete) ? raw.onSceneDelete : "none",
       tagName: String(raw.watchedTagName || "").trim() || "Whisparr Watched",
       disabled: {
         performer: !!raw.disablePerformers,
@@ -365,11 +366,22 @@
     }
   }
 
-  function findStashId(entity, box) {
+  // Every Stash ID the item has from Whisparr's stash-box (an item can carry more
+  // than one, e.g. after a merge on the stash-box).
+  function findStashIds(entity, box) {
     const host = STASH_BOXES[box].host;
-    const match = (entity.stash_ids || []).find((s) => (s.endpoint || "").toLowerCase().includes(host));
-    return match ? match.stash_id : null;
+    const seen = new Set();
+    const ids = [];
+    for (const s of (entity && entity.stash_ids) || []) {
+      if (!(s.endpoint || "").toLowerCase().includes(host) || !s.stash_id) continue;
+      const key = s.stash_id.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      ids.push(s.stash_id);
+    }
+    return ids;
   }
+
 
   // ---------------------------------------------------------------------------
   // Small UI helpers
@@ -1177,7 +1189,7 @@
   // Main panel
   // ---------------------------------------------------------------------------
 
-  function WhisparrPanel({ kind, entity, startOpen }) {
+  function WhisparrPanel({ kind, entity, startOpen, stashId, idLabel, onReport }) {
     const k = KINDS[kind];
     const Toast = PluginApi.hooks.useToast ? PluginApi.hooks.useToast() : null;
     const [settings, setSettings] = useState(null);
@@ -1203,8 +1215,6 @@
         cancelled = true;
       };
     }, []);
-
-    const stashId = useMemo(() => (settings ? findStashId(entity, settings.box) : null), [settings, entity]);
 
     useEffect(() => {
       if (!settings) return;
@@ -1234,11 +1244,10 @@
       };
     }, [settings, stashId, kind, reloadKey]);
 
-    // Keep the "Whisparr Watched" tag in step with what Whisparr reports.
+    // Tell the wrapper what Whisparr reports for this ID (it keeps the watched tag in step).
     useEffect(() => {
-      if (!settings || state.phase !== "ready") return;
-      syncWatchedTag(settings, kind, entity, !!(state.item && state.item.monitored));
-    }, [settings, state, entity, kind]);
+      if (onReport) onReport(stashId, state.phase === "ready" ? { monitored: !!(state.item && state.item.monitored) } : null);
+    }, [state, stashId]);
 
     if (settings && settings.disabled[kind]) return null;
 
@@ -1461,6 +1470,7 @@
           { type: "button", className: "wb-toggle", "aria-expanded": open, onClick: toggleOpen },
           h("span", { className: "wb-caret", "aria-hidden": true }, open ? "▾" : "▸"),
           h("span", { className: "wb-title" }, "Whisparr"),
+          idLabel ? h("span", { className: "wb-idlabel", title: stashId }, idLabel) : null,
           h("span", { className: "wb-summary" }, summary)
         ),
         settings && settings.presetEnabled && k.hasChildren && state.phase === "ready" && state.item
@@ -1483,6 +1493,107 @@
       body ? h("div", { className: "wb-body" }, body) : null
     );
   }
+
+  // One panel per Stash ID from Whisparr's stash-box. The item counts as watched
+  // (and gets the tag) when any of its IDs is monitored in Whisparr.
+  function WhisparrPanels({ kind, entity, startOpen }) {
+    const [settings, setSettings] = useState(null);
+    const [reports, setReports] = useState({});
+
+    useEffect(() => {
+      let cancelled = false;
+      loadSettings().then(
+        (s) => !cancelled && setSettings(s),
+        () => !cancelled && setSettings({ failed: true })
+      );
+      return () => {
+        cancelled = true;
+      };
+    }, []);
+
+    const ids = useMemo(() => (settings && !settings.failed ? findStashIds(entity, settings.box) : []), [settings, entity]);
+    const onReport = useCallback((id, report) => setReports((r) => Object.assign({}, r, { [id || ""]: report })), []);
+
+    useEffect(() => {
+      if (!settings || settings.failed || !ids.length) return;
+      const all = ids.map((id) => reports[id]);
+      if (all.some((r) => !r)) return; // wait until every ID has answered
+      syncWatchedTag(settings, kind, entity, all.some((r) => r.monitored));
+    }, [settings, ids, reports, entity, kind]);
+
+    if (!settings) return null;
+    if (!settings.failed && settings.disabled[kind]) return null;
+    if (ids.length <= 1) {
+      return h(WhisparrPanel, { kind, entity, startOpen, stashId: ids[0] || null, onReport });
+    }
+    return h(
+      Fragment,
+      null,
+      ids.map((id, n) =>
+        h(WhisparrPanel, {
+          key: id,
+          kind,
+          entity,
+          startOpen,
+          stashId: id,
+          idLabel: "ID " + (n + 1) + " of " + ids.length + " · " + id.slice(0, 8),
+          onReport,
+        })
+      )
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Deleting a scene in Stash
+  // ---------------------------------------------------------------------------
+
+  // Called after the scene is deleted from its Stash page. Depending on the
+  // setting, unmonitors it in Whisparr, or removes it there and adds an import
+  // exclusion so a studio/performer refresh never adds it back. Files are left
+  // alone (Stash already handled them).
+  async function handleSceneDeleted(scene) {
+    let settings;
+    try {
+      settings = await loadSettings();
+    } catch (e) {
+      return;
+    }
+    if (settings.onSceneDelete === "none" || !settings.baseUrl || !settings.apiKey) return;
+    for (const id of findStashIds(scene, settings.box)) {
+      try {
+        const movie = await whisparr(settings, "GET", "/movie/" + encodeURIComponent(id)).catch((err) => {
+          if (err.status === 404) return null;
+          throw err;
+        });
+        if (!movie || !movie.id) continue;
+        if (settings.onSceneDelete === "unmonitor") {
+          if (movie.monitored) await whisparr(settings, "PATCH", "/movie/" + movie.id, { monitored: false });
+          console.info("[WhisparrBridge] unmonitored deleted scene in Whisparr:", movie.title);
+        } else {
+          await whisparr(settings, "DELETE", "/movie/" + movie.id + "?deleteFiles=false&addImportExclusion=true");
+          console.info("[WhisparrBridge] removed and excluded deleted scene in Whisparr:", movie.title);
+        }
+      } catch (err) {
+        console.error("[WhisparrBridge] could not update Whisparr for the deleted scene", err);
+      }
+    }
+  }
+
+  // Stash's scene page calls props.onDelete once its delete dialog has deleted the scene.
+  PluginApi.patch.before("ScenePage", function () {
+    const args = Array.prototype.slice.call(arguments);
+    const props = args[0];
+    if (!props || !props.scene || typeof props.onDelete !== "function" || props.onDelete.__whisparrBridge) return args;
+    const original = props.onDelete;
+    const scene = props.scene;
+    const wrapped = function () {
+      handleSceneDeleted(scene);
+      return original.apply(this, arguments);
+    };
+    wrapped.__whisparrBridge = true;
+    args[0] = Object.assign({}, props, { onDelete: wrapped });
+    return args;
+  });
 
   // ---------------------------------------------------------------------------
   // Settings page (replaces Stash's list of fields for this plugin)
@@ -1935,6 +2046,28 @@
           "Sync library now"
         )
       ),
+      h(
+        SettingRow,
+        {
+          title: "Deleted scenes",
+          description:
+            "When you delete a scene from its page in Stash. \"Remove and exclude\" stops a followed studio or performer from adding it back. Whisparr's own \"Unmonitor Deleted Movies\" (Settings > Media Management) also catches files deleted elsewhere.",
+        },
+        h(
+          Form.Control,
+          {
+            as: "select",
+            size: "sm",
+            className: "wb-inline-select",
+            "aria-label": "When a scene is deleted in Stash",
+            value: s.onSceneDelete,
+            onChange: (e) => save({ onSceneDelete: e.target.value }),
+          },
+          h("option", { value: "none" }, "Do nothing in Whisparr"),
+          h("option", { value: "unmonitor" }, "Unmonitor it in Whisparr"),
+          h("option", { value: "exclude" }, "Remove it from Whisparr and exclude it")
+        )
+      ),
       h(ConnectionModal, { raw, show: modal === "connection", onHide: () => setModal(null), onSave: save }),
       h(PresetModal, { raw, show: modal === "preset", onHide: () => setModal(null), onSave: save }),
       h(TagModal, { raw, show: modal === "tag", onHide: () => setModal(null), onSave: save })
@@ -1973,12 +2106,12 @@
 
   afterPatch("PerformerDetailsPanel", function (props, result) {
     if (!props || !props.performer) return result;
-    return h(Fragment, null, result, h(WhisparrPanel, { key: "wb-" + props.performer.id, kind: "performer", entity: props.performer }));
+    return h(Fragment, null, result, h(WhisparrPanels, { key: "wb-" + props.performer.id, kind: "performer", entity: props.performer }));
   });
 
   afterPatch("StudioDetailsPanel", function (props, result) {
     if (!props || !props.studio) return result;
-    return h(Fragment, null, result, h(WhisparrPanel, { key: "wb-" + props.studio.id, kind: "studio", entity: props.studio }));
+    return h(Fragment, null, result, h(WhisparrPanels, { key: "wb-" + props.studio.id, kind: "studio", entity: props.studio }));
   });
 
   // Scene pages get their own tab. The tab is hidden when the setting turns it off.
@@ -2011,7 +2144,7 @@
       h(
         Tab.Pane,
         { key: "wb-scene-pane", eventKey: "whisparr-bridge-panel", mountOnEnter: true },
-        h(WhisparrPanel, { key: "wb-" + props.scene.id, kind: "scene", entity: props.scene, startOpen: true })
+        h(WhisparrPanels, { key: "wb-" + props.scene.id, kind: "scene", entity: props.scene, startOpen: true })
       )
     );
   });

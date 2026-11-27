@@ -227,22 +227,25 @@ def sync_watched_tags(conn, log):
     for kind in kinds:
         seen = tagged = untagged = 0
         for items in stash.pages(kind):
-            # Stash items with an ID from Whisparr's stash-box
-            sid_by_item = {}
+            # Every ID each item has from Whisparr's stash-box (there can be more than one)
+            sids_by_item = {}
             for item in items:
-                sid = next(
-                    (s["stash_id"] for s in item.get("stash_ids") or [] if host in (s.get("endpoint") or "").lower()),
-                    None,
-                )
-                if sid:
-                    sid_by_item[item["id"]] = sid.lower()
-            watched = watched_among(base, api_key, kind, sorted(set(sid_by_item.values())))
+                sids = {
+                    s["stash_id"].lower()
+                    for s in item.get("stash_ids") or []
+                    if s.get("stash_id") and host in (s.get("endpoint") or "").lower()
+                }
+                if sids:
+                    sids_by_item[item["id"]] = sids
+            all_sids = sorted(set().union(*sids_by_item.values())) if sids_by_item else []
+            watched = watched_among(base, api_key, kind, all_sids)
 
             add, remove, tags_by_id = [], [], {}
             for item in items:
                 tags = [t["id"] for t in item.get("tags") or []]
                 tags_by_id[item["id"]] = tags
-                should = sid_by_item.get(item["id"]) in watched
+                # watched when any of its IDs is monitored in Whisparr
+                should = bool(sids_by_item.get(item["id"], set()) & watched)
                 has = tag_id is not None and tag_id in tags
                 if should and not has:
                     add.append(item["id"])

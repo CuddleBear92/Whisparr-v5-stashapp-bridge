@@ -369,3 +369,17 @@
   background: #e5414f;
   box-shadow: 0 0 4px #e5414f;
 }
+
+.wb-idlabel {
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  color: #c0c6cc;
+  font-family: monospace;
+  font-size: 0.75rem;
+  padding: 0 0.4rem;
+}
+
+.wb-inline-select {
+  max-width: 20rem;
+  min-width: 14rem;
+}

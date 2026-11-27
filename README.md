@@ -87,10 +87,31 @@ To turn the whole plugin off, use the Disable button Stash shows next to it.
 
 ## How items are matched
 
-Only by **stash-box ID**, never by name. Whisparr v5 identifies performers,
-studios and scenes by their StashDB (or ThePornDB) ID. The plugin takes the
-Stash ID for that stash-box from the Stash item and asks Whisparr for exactly
-that ID. Items without one show "No StashDB ID" / "No ThePornDB ID".
+Only by **stash-box ID**, never by name, so renames on the stash-box don't
+matter. Whisparr v5 identifies performers, studios and scenes by their StashDB
+(or ThePornDB) ID; the plugin sends Whisparr exactly the IDs the Stash item has
+for the stash-box you chose. Items without one show "No StashDB ID" /
+"No ThePornDB ID" and are skipped by the library sync.
+
+An item with **more than one** ID from that stash-box (for example after a merge)
+gets one Whisparr section per ID, each labelled "ID 1 of 2 · …", with its own
+add, edit and preset. It counts as watched (and gets the tag) when any of its IDs
+is monitored in Whisparr.
+
+## Deleted scenes
+
+**Deleted scenes** in the plugin settings decides what happens in Whisparr when
+you delete a scene with the **Delete** button on that scene's page in Stash:
+
+- *Do nothing* (default).
+- *Unmonitor it in Whisparr*: it stays in Whisparr but won't be searched for again.
+- *Remove it from Whisparr and exclude it*: removed, with an import exclusion, so
+  a followed studio or performer never adds it back. Files are not touched.
+
+Deletes from the duplicate checker, bulk deletes from scene lists and files
+deleted outside Stash are deliberately **not** affected. For files that disappear
+some other way, Whisparr's own **Settings › Media Management › Unmonitor Deleted
+Movies** unmonitors scenes whose file goes missing.
 
 ## The "Whisparr Watched" tag
 

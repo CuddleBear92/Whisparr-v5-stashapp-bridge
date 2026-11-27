@@ -1,6 +1,6 @@
 name: Whisparr Bridge
 description: Shows and manages performers, studios and scenes in Whisparr v5 from their Stash pages.
-version: 0.5.1
+version: 0.6.0
 url: https://github.com/CuddleBear92/Whisparr-v5-stashapp-bridge
 
 ui:
@@ -94,6 +94,10 @@ settings:
     displayName: Don't manage the watched tag
     description: Turn on to stop the plugin from adding or removing the watched tag.
     type: BOOLEAN
+  onSceneDelete:
+    displayName: When a scene is deleted in Stash
+    description: "none, unmonitor (unmonitor it in Whisparr) or exclude (remove it from Whisparr and add an import exclusion). Applies when a scene is deleted from its page."
+    type: STRING
   disablePerformers:
     displayName: Off on performer pages
     description: Hide the Whisparr panel on performer pages
