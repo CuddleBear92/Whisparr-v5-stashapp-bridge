@@ -146,10 +146,11 @@ have a file for it yet, a background job (visible in Stash's job queue):
 
 1. adds the scene to Whisparr if needed (root folder/profile from the settings
    window) and monitors it, if that's on;
-2. works out the path Whisparr sees for the file: your **path mappings** if set
-   (`Stash path => Whisparr path`, one per line), else Whisparr's download folder
-   as listed in Activity › Queue (matched by release folder or file name), else
-   the same path as Stash;
+2. finds the file as Whisparr sees it: first through its Activity › Queue
+   download (Whisparr lists that download's files itself; the file name must
+   match exactly), then your **path mappings** (Import tagged scenes › Edit ›
+   Path mappings, `Stash path => Whisparr path` per line), then the same path
+   as Stash;
 3. checks the file with Whisparr's manual import for that scene, and stops with
    Whisparr's reason if it would refuse it (e.g. not an upgrade);
 4. imports it with **move**, so Whisparr renames and moves it as usual, and
@@ -163,7 +164,9 @@ have a file for it yet, a background job (visible in Stash's job queue):
 In most setups no path mappings are needed.
 
 The scene's Whisparr tab also has **Import file into Whisparr** to do this by
-hand. Saves that don't change stash IDs return straight away, but the hook still
+hand; it waits for the result and shows it (or Whisparr's reason) in the tab.
+Imports started by the tagger save their outcome too, and the tab shows it as
+"Last import attempt". Saves that don't change stash IDs return straight away, but the hook still
 starts Python briefly on every scene save (~40 ms), which is noticeable only in
 very large bulk edits.
 

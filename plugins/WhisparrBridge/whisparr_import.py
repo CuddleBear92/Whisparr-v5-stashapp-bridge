@@ -16,6 +16,8 @@ checks and queues import_scene as a background Stash job.
 Standard library only.
 """
 
+import json
+import os
 import posixpath
 import time
 import urllib.parse
@@ -87,6 +89,38 @@ def box_ids(stash_ids, box):
 
 def import_enabled(raw):
     return bool(raw.get("importOnTag"))
+
+
+# ---------------------------------------------------------------------------
+# Last result per scene, so the scene tab can show what happened to an import
+# that ran in the background. Served to the UI as a plugin asset (state/).
+# ---------------------------------------------------------------------------
+
+STATE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state")
+RESULTS_FILE = os.path.join(STATE_DIR, "imports.json")
+KEEP_RESULTS = 300
+
+
+def record_result(scene_id, ok, message, log):
+    if not scene_id:
+        return
+    try:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        try:
+            with open(RESULTS_FILE, "r", encoding="utf-8") as f:
+                results = json.load(f)
+        except (OSError, ValueError):
+            results = {}
+        results[str(scene_id)] = {"ok": bool(ok), "message": message, "time": int(time.time())}
+        if len(results) > KEEP_RESULTS:
+            newest = sorted(results.items(), key=lambda kv: kv[1].get("time", 0))[-KEEP_RESULTS:]
+            results = dict(newest)
+        tmp = RESULTS_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(results, f)
+        os.replace(tmp, RESULTS_FILE)
+    except OSError as e:
+        log("d", "Could not save the import result: %s" % e)
 
 
 # ---------------------------------------------------------------------------
@@ -191,13 +225,38 @@ def queue_records(base, api_key):
 
 
 def queue_download_id(records, path):
-    """downloadId of the Activity > Queue item whose output contains this (Whisparr-side) file."""
+    """downloadId of the Activity > Queue item for this (Whisparr-side) file: the item
+    whose output is the file itself, else the one with the most specific folder.
+    Single-file downloads often share one download folder, so a folder that merely
+    contains the file says nothing on its own; it has to be the file or its own folder."""
     norm = _norm(path)
+    best, best_len = None, -1
     for rec in records:
         out = _norm(rec.get("outputPath"))
-        if out and (norm == out or norm.startswith(out + "/")) and rec.get("downloadId"):
+        if not out or not rec.get("downloadId"):
+            continue
+        if norm == out:
             return rec["downloadId"]
-    return None
+        # A folder download is named after its folder; a single-file download that
+        # sits in a shared download folder is named after its file, so it never matches here.
+        title = (rec.get("title") or "").strip()
+        if norm.startswith(out + "/") and title == _name(out) and len(out) > best_len:
+            best, best_len = rec["downloadId"], len(out)
+    return best
+
+
+def queue_matches(stash_path, records):
+    """Queue items that look like this file's download: the output (or its title) is the
+    file itself or the folder it sits in."""
+    file_name = _name(stash_path)
+    stem = posixpath.splitext(file_name)[0]
+    parent_name = _name(posixpath.dirname(_norm(stash_path)))
+    out = []
+    for rec in records:
+        names = {_name(rec.get("outputPath")), (rec.get("title") or "").strip()}
+        if names & {file_name, stem, parent_name} and rec.get("downloadId"):
+            out.append(rec)
+    return out
 
 
 def path_candidates(stash_path, pairs, records):
@@ -302,11 +361,30 @@ def import_scene(conn, scene_id, log, progress):
     stash_path = scene["files"][0]["path"]
     progress(0.25)
 
-    # Find the path under which Whisparr sees this file.
+    # Find the file as Whisparr sees it. First through its queue item (Whisparr lists
+    # that download's files itself, so no path guessing), then by path.
     records = queue_records(base, api_key)
     path = item = None
+    download_id = None
     tried = []
-    for candidate, how in path_candidates(stash_path, pairs, records):
+    file_name = _name(stash_path)
+    for rec in queue_matches(stash_path, records):
+        tried.append("download " + str(rec.get("title") or rec.get("downloadId")))
+        items = whisparr(
+            base,
+            api_key,
+            "GET",
+            "/manualimport?downloadId=%s&movieId=%d&filterExistingFiles=false" % (urllib.parse.quote(rec["downloadId"]), movie["id"]),
+        ) or []
+        # Only the exact same file name: many downloads can share a folder, so a
+        # download's only file is not necessarily this one.
+        found = next((i for i in items if _name(i.get("path")) == file_name), None)
+        if found is not None:
+            path, item, download_id = found.get("path"), found, rec["downloadId"]
+            log("i", "Found the file in Whisparr's queue: %s (download %s)" % (path, rec.get("title")))
+            break
+    candidates = [] if item is not None else path_candidates(stash_path, pairs, records)
+    for candidate, how in candidates:
         tried.append(candidate)
         items = whisparr(
             base,
@@ -323,13 +401,15 @@ def import_scene(conn, scene_id, log, progress):
             break
     if item is None:
         raise RuntimeError(
-            "Whisparr can't see the file. Tried: %s. Add a path mapping in the plugin settings (Stash path => Whisparr path)."
-            % ", ".join(tried)
+            "Whisparr can't see the file. Stash has it at %s; tried: %s. If Whisparr sees that folder under another path, "
+            "add it in Settings > Plugins > Whisparr Bridge > Import tagged scenes > Edit > Path mappings, "
+            "e.g. '%s => /path/as/whisparr/sees/it'."
+            % (stash_path, ", ".join(tried) or "nothing", posixpath.dirname(_norm(stash_path)))
         )
     pair = learned_pair(stash_path, path)
     if pair and pair not in pairs:
         pairs = pairs + [pair]
-    download_id = queue_download_id(records, path)
+    download_id = download_id or queue_download_id(records, path)
     log("i", "Importing %s as %s%s" % (path, movie.get("title"), " (download %s)" % download_id if download_id else ""))
 
     # Re-check the file against this scene (quality, upgrade rules, ...).

@@ -1264,6 +1264,36 @@
     const [reloadKey, setReloadKey] = useState(0);
     const [busyCommand, setBusyCommand] = useState(null);
     const [presetBusy, setPresetBusy] = useState(false);
+    const [importRun, setImportRun] = useState(null); // {busy} | {ok, message, time}
+    const [lastImport, setLastImport] = useState(null);
+
+    // What happened the last time this scene was imported in the background (tagger).
+    useEffect(() => {
+      if (kind !== "scene") return;
+      let cancelled = false;
+      fetch("/plugin/" + PLUGIN_ID + "/assets/state/imports.json", { cache: "no-store", credentials: "same-origin" })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((all) => !cancelled && all && setLastImport(all[String(entity.id)] || null))
+        .catch(() => {});
+      return () => {
+        cancelled = true;
+      };
+    }, [kind, entity.id, reloadKey]);
+
+    async function onImportNow() {
+      setImportRun({ busy: true });
+      try {
+        const data = await stashGql(
+          "mutation ($plugin_id: ID!, $args: Map) { runPluginOperation(plugin_id: $plugin_id, args: $args) }",
+          { plugin_id: PLUGIN_ID, args: { mode: "importScene", sceneId: String(entity.id), wait: true } }
+        );
+        const out = data.runPluginOperation || { ok: false, message: "No answer from the plugin. Is Python available to Stash?" };
+        setImportRun({ ok: !!out.ok, message: out.message, time: Date.now() / 1000 });
+        if (out.ok) setReloadKey((n) => n + 1);
+      } catch (err) {
+        setImportRun({ ok: false, message: err.message, time: Date.now() / 1000 });
+      }
+    }
 
     const reload = useCallback(() => {
       setMode("view");
@@ -1461,9 +1491,10 @@
                           variant: "secondary",
                           size: "sm",
                           title: "Add the scene to Whisparr and import this file (move and rename)",
-                          onClick: () => queueSceneImport(entity.id, Toast),
+                          disabled: !!(importRun && importRun.busy),
+                          onClick: onImportNow,
                         },
-                        "Import file into Whisparr"
+                        importRun && importRun.busy ? h(Spinner, { animation: "border", size: "sm" }) : "Import file into Whisparr"
                       )
                     : null,
                   h(Button, { variant: "primary", size: "sm", onClick: () => setMode("add") }, "Add to Whisparr")
@@ -1506,9 +1537,10 @@
                             variant: "secondary",
                             size: "sm",
                             title: "Import this Stash file into Whisparr for this scene (move and rename)",
-                            onClick: () => queueSceneImport(entity.id, Toast),
+                            disabled: !!(importRun && importRun.busy),
+                          onClick: onImportNow,
                           },
-                          "Import file into Whisparr"
+                          importRun && importRun.busy ? h(Spinner, { animation: "border", size: "sm" }) : "Import file into Whisparr"
                         )
                       : null,
                     k.hasChildren
@@ -1559,6 +1591,31 @@
                 )
           );
         }
+      }
+    }
+
+    if (body && kind === "scene") {
+      const shown = importRun && !importRun.busy ? importRun : lastImport;
+      if (importRun && importRun.busy) {
+        body = h(
+          Fragment,
+          null,
+          body,
+          h("div", { className: "wb-loading wb-import-result" }, h(Spinner, { animation: "border", size: "sm" }), " Importing into Whisparr… this waits for Whisparr to move the file.")
+        );
+      } else if (shown) {
+        const when = shown.time ? new Date(shown.time * 1000).toLocaleString() : "";
+        body = h(
+          Fragment,
+          null,
+          body,
+          h(
+            "div",
+            { className: (shown.ok ? "wb-success" : "wb-error") + " wb-import-result" },
+            h("strong", null, (shown === importRun ? "Import: " : "Last import attempt" + (when ? " (" + when + ")" : "") + ": ")),
+            shown.message
+          )
+        );
       }
     }
 
@@ -2165,19 +2222,6 @@
         help: "Stash then follows the moved file and keeps the scene. The folder must be inside one of Stash's library paths.",
       })
     );
-  }
-
-  async function queueSceneImport(sceneId, Toast) {
-    try {
-      await stashGql(
-        "mutation ($id: ID!, $desc: String, $args: Map) { runPluginTask(plugin_id: $id, description: $desc, args_map: $args) }",
-        { id: PLUGIN_ID, desc: "Import scene into Whisparr (scene " + sceneId + ")", args: { mode: "importScene", sceneId: String(sceneId) } }
-      );
-      if (Toast) Toast.success("Import queued. Progress shows in Stash's job queue.");
-    } catch (err) {
-      if (Toast) Toast.error(err);
-      else alert(err.message);
-    }
   }
 
   async function startTagSync(Toast) {

@@ -1,6 +1,6 @@
 name: Whisparr Bridge
 description: Shows and manages performers, studios and scenes in Whisparr v5 from their Stash pages.
-version: 0.7.1
+version: 0.7.2
 url: https://github.com/CuddleBear92/Whisparr-v5-stashapp-bridge
 
 ui:
@@ -8,6 +8,9 @@ ui:
     - whisparr_bridge.js
   css:
     - whisparr_bridge.css
+  # Last import result per scene (written by the import job), read by the scene tab.
+  assets:
+    state: state
 
 # Requests to Whisparr are relayed through whisparr_proxy.py on the Stash
 # server. Stash's Content-Security-Policy blocks the browser from calling

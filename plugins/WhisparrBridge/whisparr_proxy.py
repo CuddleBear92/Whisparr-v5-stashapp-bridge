@@ -83,15 +83,21 @@ def main():
         import whisparr_import
         import whisparr_tasks
 
+        scene_id = str(args.get("sceneId") or "")
         try:
-            respond(
-                whisparr_import.import_scene(
-                    payload.get("server_connection") or {}, str(args.get("sceneId") or ""), log, whisparr_tasks.progress
-                )
+            message = whisparr_import.import_scene(
+                payload.get("server_connection") or {}, scene_id, log, whisparr_tasks.progress
             )
+            whisparr_import.record_result(scene_id, True, message, log)
+            respond({"ok": True, "message": message} if args.get("wait") else message)
         except Exception as e:
             log("e", "Import into Whisparr failed: %s" % e)
-            respond(error="Import into Whisparr failed: %s" % e)
+            whisparr_import.record_result(scene_id, False, str(e), log)
+            # The scene tab runs this directly and shows the reason itself.
+            if args.get("wait"):
+                respond({"ok": False, "message": str(e)})
+            else:
+                respond(error="Import into Whisparr failed: %s" % e)
         return
 
     if args.get("mode") == "syncTags":
