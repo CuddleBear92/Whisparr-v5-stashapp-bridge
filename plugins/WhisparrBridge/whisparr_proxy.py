@@ -64,6 +64,36 @@ def main():
         return
 
     args = payload.get("args") or {}
+    hook = args.get("hookContext")
+    if hook and "stash_ids" not in (hook.get("inputFields") or []):
+        respond("no stash_ids change")  # most saves: nothing to do, return straight away
+        return
+    if hook:
+        # Scene.Update.Post: runs inside Stash's save request, so it only queues work.
+        import whisparr_import
+
+        try:
+            respond(whisparr_import.hook_scene_update(payload.get("server_connection") or {}, hook, log))
+        except Exception as e:
+            log("w", "Whisparr import hook: %s" % e)
+            respond("hook skipped: %s" % e)
+        return
+
+    if args.get("mode") == "importScene":
+        import whisparr_import
+        import whisparr_tasks
+
+        try:
+            respond(
+                whisparr_import.import_scene(
+                    payload.get("server_connection") or {}, str(args.get("sceneId") or ""), log, whisparr_tasks.progress
+                )
+            )
+        except Exception as e:
+            log("e", "Import into Whisparr failed: %s" % e)
+            respond(error="Import into Whisparr failed: %s" % e)
+        return
+
     if args.get("mode") == "syncTags":
         import whisparr_tasks
 

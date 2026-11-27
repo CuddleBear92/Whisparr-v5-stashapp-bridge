@@ -1454,6 +1454,18 @@
                   "div",
                   { className: "wb-actions" },
                   h("span", { className: "text-muted wb-grow" }, "Whisparr doesn't have this " + k.label + " yet."),
+                  kind === "scene" && entity.files && entity.files.length
+                    ? h(
+                        Button,
+                        {
+                          variant: "secondary",
+                          size: "sm",
+                          title: "Add the scene to Whisparr and import this file (move and rename)",
+                          onClick: () => queueSceneImport(entity.id, Toast),
+                        },
+                        "Import file into Whisparr"
+                      )
+                    : null,
                   h(Button, { variant: "primary", size: "sm", onClick: () => setMode("add") }, "Add to Whisparr")
                 )
           );
@@ -1487,6 +1499,18 @@
                     "div",
                     { className: "wb-actions" },
                     h(Button, { variant: "primary", size: "sm", onClick: () => setMode("edit") }, "Edit"),
+                    kind === "scene" && !item.hasFile && entity.files && entity.files.length
+                      ? h(
+                          Button,
+                          {
+                            variant: "secondary",
+                            size: "sm",
+                            title: "Import this Stash file into Whisparr for this scene (move and rename)",
+                            onClick: () => queueSceneImport(entity.id, Toast),
+                          },
+                          "Import file into Whisparr"
+                        )
+                      : null,
                     k.hasChildren
                       ? h(Button, { variant: "secondary", size: "sm", onClick: () => setMode("years") }, "Years")
                       : null,
@@ -2034,6 +2058,128 @@
     );
   }
 
+  function ImportModal({ raw, show, onHide, onSave }) {
+    const initial = () => ({
+      importPathMappings: String(raw.importPathMappings || ""),
+      importRootFolder: String(raw.importRootFolder || ""),
+      importQualityProfileId: Number(raw.importQualityProfileId) || 0,
+      importMonitor: raw.importMonitor !== false,
+      importRescan: raw.importRescan !== false,
+    });
+    const [form, setForm] = useState(initial);
+    const [meta, setMeta] = useState(null);
+    const [metaError, setMetaError] = useState(null);
+    const [saving, setSaving] = useState(false);
+    const set = (patch) => setForm((f) => Object.assign({}, f, patch));
+    useEffect(() => {
+      if (!show) return;
+      setForm(initial());
+      const s = normaliseSettings(raw);
+      if (!s.baseUrl || !s.apiKey) {
+        setMetaError("Set up the Whisparr connection first to pick a root folder and profile.");
+        return;
+      }
+      loadMeta(s).then(setMeta, (err) => setMetaError(err.message));
+    }, [show]);
+
+    const badLines = form.importPathMappings
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l && !/^.+=>.+$/.test(l));
+
+    async function save() {
+      if (badLines.length) return;
+      setSaving(true);
+      try {
+        await onSave({
+          importPathMappings: form.importPathMappings.trim(),
+          importRootFolder: form.importRootFolder,
+          importQualityProfileId: Number(form.importQualityProfileId) || 0,
+          importMonitor: form.importMonitor,
+          importRescan: form.importRescan,
+        });
+        onHide();
+      } finally {
+        setSaving(false);
+      }
+    }
+
+    return h(
+      SettingsModal,
+      { title: "Import tagged scenes", show, onHide, onSave: save, saving },
+      h(
+        "p",
+        { className: "text-muted" },
+        "When the tagger (or an edit) gives a scene an ID from Whisparr's stash-box and Whisparr doesn't have its file yet, a background job adds the scene to Whisparr, imports the file with move and rename (clearing it from Activity > Queue if it's there) and then scans the new folder in Stash so the scene follows its file."
+      ),
+      h(
+        Form.Group,
+        { controlId: "wb-set-mappings" },
+        h(Form.Label, null, "Path mappings"),
+        h(Form.Control, {
+          as: "textarea",
+          rows: 3,
+          value: form.importPathMappings,
+          isInvalid: badLines.length > 0,
+          placeholder: "/data/downloads => /downloads\n/media/whisparr => /synology/whisparr",
+          onChange: (e) => set({ importPathMappings: e.target.value }),
+        }),
+        h(
+          Form.Text,
+          { className: badLines.length ? "text-danger" : "text-muted" },
+          badLines.length
+            ? "Each line needs the form  Stash path => Whisparr path  (\"" + badLines[0] + "\")"
+            : "One per line: Stash path => Whisparr path. Needed when Stash and Whisparr see the same folders under different paths (e.g. different Docker mounts). Used both ways."
+        )
+      ),
+      metaError ? h("div", { className: "wb-warning" }, metaError) : null,
+      meta
+        ? h(
+            Fragment,
+            null,
+            h(Select, {
+              label: "Root folder for scenes Whisparr doesn't have yet",
+              value: form.importRootFolder,
+              options: [{ value: "", label: "Whisparr's first root folder" }].concat(meta.rootFolders.map((r) => ({ value: r.path, label: r.path }))),
+              onChange: (v) => set({ importRootFolder: v }),
+            }),
+            h(Select, {
+              label: "Quality profile for scenes Whisparr doesn't have yet",
+              value: form.importQualityProfileId,
+              options: [{ value: 0, label: "Whisparr's first profile" }].concat(meta.profiles.map((p) => ({ value: p.id, label: p.name }))),
+              onChange: (v) => set({ importQualityProfileId: Number(v) }),
+            })
+          )
+        : null,
+      h(Switch, {
+        id: "wb-set-import-monitor",
+        label: "Monitor imported scenes",
+        checked: form.importMonitor,
+        onChange: (v) => set({ importMonitor: v }),
+      }),
+      h(Switch, {
+        id: "wb-set-import-rescan",
+        label: "Scan the new folder in Stash afterwards",
+        checked: form.importRescan,
+        onChange: (v) => set({ importRescan: v }),
+        help: "Stash then follows the moved file and keeps the scene. The folder must be inside one of Stash's library paths.",
+      })
+    );
+  }
+
+  async function queueSceneImport(sceneId, Toast) {
+    try {
+      await stashGql(
+        "mutation ($id: ID!, $desc: String, $args: Map) { runPluginTask(plugin_id: $id, description: $desc, args_map: $args) }",
+        { id: PLUGIN_ID, desc: "Import scene into Whisparr (scene " + sceneId + ")", args: { mode: "importScene", sceneId: String(sceneId) } }
+      );
+      if (Toast) Toast.success("Import queued. Progress shows in Stash's job queue.");
+    } catch (err) {
+      if (Toast) Toast.error(err);
+      else alert(err.message);
+    }
+  }
+
   async function startTagSync(Toast) {
     try {
       await stashGql(
@@ -2137,6 +2283,22 @@
       h(
         SettingRow,
         {
+          title: "Import tagged scenes",
+          value: raw.importOnTag
+            ? (raw.importPathMappings ? "Path mappings set" : "No path mappings") +
+              " · " +
+              (raw.importMonitor !== false ? "monitors" : "doesn't monitor") +
+              " · " +
+              (raw.importRescan !== false ? "rescans Stash" : "no Stash scan")
+            : null,
+          description: "When the tagger gives a scene an ID from Whisparr's stash-box, import its file into Whisparr (move and rename) and rescan it in Stash.",
+        },
+        switchFor("wb-import-enabled", raw.importOnTag ? "On" : "Off", !!raw.importOnTag, (v) => save({ importOnTag: v })),
+        h(Button, { variant: "secondary", size: "sm", onClick: () => setModal("import") }, "Edit")
+      ),
+      h(
+        SettingRow,
+        {
           title: "Deleted scenes",
           description:
             "When you delete a scene from its page in Stash. \"Remove and exclude\" stops a followed studio or performer from adding it back. Whisparr's own \"Unmonitor Deleted Movies\" (Settings > Media Management) also catches files deleted elsewhere.",
@@ -2158,7 +2320,8 @@
       ),
       h(ConnectionModal, { raw, show: modal === "connection", onHide: () => setModal(null), onSave: save }),
       h(PresetModal, { raw, show: modal === "preset", onHide: () => setModal(null), onSave: save }),
-      h(TagModal, { raw, show: modal === "tag", onHide: () => setModal(null), onSave: save })
+      h(TagModal, { raw, show: modal === "tag", onHide: () => setModal(null), onSave: save }),
+      h(ImportModal, { raw, show: modal === "import", onHide: () => setModal(null), onSave: save })
     );
   }
 

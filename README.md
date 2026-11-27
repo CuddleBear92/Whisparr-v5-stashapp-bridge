@@ -138,6 +138,28 @@ steadily and tags are written as it goes (stopping it keeps what's done).
 Items without a Stash ID from Whisparr's stash-box are never tagged. If you
 rename the tag in the settings, the old tag is left as it is.
 
+## Importing tagged scenes into Whisparr
+
+Turn on **Import tagged scenes** in the plugin settings. When the scene tagger
+(or an edit) gives a scene an ID from Whisparr's stash-box, and Whisparr doesn't
+have a file for it yet, a background job (visible in Stash's job queue):
+
+1. adds the scene to Whisparr if needed (root folder/profile from the settings
+   window) and monitors it, if that's on;
+2. maps the Stash file path to the path Whisparr sees (**path mappings**, one
+   `Stash path => Whisparr path` per line, used both ways);
+3. checks the file with Whisparr's manual import for that scene, and stops with
+   Whisparr's reason if it would refuse it (e.g. not an upgrade);
+4. imports it with **move**, so Whisparr renames and moves it as usual, and
+   clears it from Activity › Queue when it came from a download;
+5. scans the new folder in Stash, so Stash follows the moved file and keeps the
+   scene (the folder has to be inside one of Stash's library paths).
+
+The scene's Whisparr tab also has **Import file into Whisparr** to do this by
+hand. Saves that don't change stash IDs return straight away, but the hook still
+starts Python briefly on every scene save (~40 ms), which is noticeable only in
+very large bulk edits.
+
 ## How it talks to Whisparr
 
 Stash's Content-Security-Policy stops plugin JavaScript from calling other

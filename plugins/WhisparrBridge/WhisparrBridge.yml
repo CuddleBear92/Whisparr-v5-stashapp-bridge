@@ -1,6 +1,6 @@
 name: Whisparr Bridge
 description: Shows and manages performers, studios and scenes in Whisparr v5 from their Stash pages.
-version: 0.6.1
+version: 0.7.0
 url: https://github.com/CuddleBear92/Whisparr-v5-stashapp-bridge
 
 ui:
@@ -18,6 +18,15 @@ exec:
   - "{pluginDir}/whisparr_proxy.py"
 interface: raw
 errLog: error
+
+# Scene.Update.Post: when the tagger (or an edit) gives a scene a stash-box ID, the
+# hook queues a background "Import scene into Whisparr" job (only if that setting
+# is on and Whisparr doesn't already have the file). The hook itself returns fast.
+hooks:
+  - name: Import tagged scenes into Whisparr
+    description: Queues an import into Whisparr when a scene gets an ID from Whisparr's stash-box (if turned on in the plugin settings).
+    triggeredBy:
+      - Scene.Update.Post
 
 tasks:
   - name: Sync Whisparr Watched tags
@@ -93,6 +102,28 @@ settings:
   disableWatchedTag:
     displayName: Don't manage the watched tag
     description: Turn on to stop the plugin from adding or removing the watched tag.
+    type: BOOLEAN
+  importOnTag:
+    displayName: Import tagged scenes into Whisparr
+    description: When a scene gets an ID from Whisparr's stash-box, import its file into Whisparr (move and rename).
+    type: BOOLEAN
+  importPathMappings:
+    displayName: Import path mappings
+    description: "One per line - Stash path => Whisparr path, e.g. /data/downloads => /downloads"
+    type: STRING
+  importRootFolder:
+    displayName: Import root folder
+    description: Root folder for scenes Whisparr doesn't have yet. Empty = Whisparr's first root folder.
+    type: STRING
+  importQualityProfileId:
+    displayName: Import quality profile ID
+    description: Quality profile for scenes Whisparr doesn't have yet. 0 = the first profile.
+    type: NUMBER
+  importMonitor:
+    displayName: Monitor imported scenes
+    type: BOOLEAN
+  importRescan:
+    displayName: Scan in Stash after import
     type: BOOLEAN
   onSceneDelete:
     displayName: When a scene is deleted in Stash

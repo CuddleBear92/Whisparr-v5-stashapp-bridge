@@ -109,16 +109,18 @@ def whisparr_settings(raw):
     return base, api_key
 
 
-def whisparr(base, api_key, method, path, body=None):
+def whisparr(base, api_key, method, path, body=None, timeout=300, allow_404=False):
     data = json.dumps(body).encode("utf-8") if body is not None else None
     headers = {"Accept": "application/json", "X-Api-Key": api_key}
     if data is not None:
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(base + "/api/v5" + path, data=data, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=300) as res:
+        with urllib.request.urlopen(req, timeout=timeout) as res:
             return json.loads(res.read().decode("utf-8") or "null")
     except urllib.error.HTTPError as e:
+        if allow_404 and e.code == 404:
+            return None
         detail = e.read().decode("utf-8", errors="replace")[:300]
         raise RuntimeError("Whisparr answered %s %s with HTTP %d %s" % (method, path, e.code, detail))
     except urllib.error.URLError as e:
