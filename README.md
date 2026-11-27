@@ -169,7 +169,12 @@ In most setups no path mappings are needed.
 The scene's Whisparr tab also has **Import file into Whisparr** to do this by
 hand; it waits for the result and shows it (or Whisparr's reason) in the tab.
 Imports started by the tagger save their outcome too, and the tab shows it as
-"Last import attempt". Saves that don't change stash IDs return straight away, but the hook still
+"Last import attempt". If Whisparr already has a different file for the scene, the new file is offered
+as a replacement and Whisparr's upgrade rules decide; if it refuses (e.g. "not an
+upgrade"), the reason is shown and nothing is moved. Only a file Whisparr already
+manages (same name) is skipped.
+
+Saves that don't change stash IDs return straight away, but the hook still
 starts Python briefly on every scene save (~40 ms), which is noticeable only in
 very large bulk edits.
 

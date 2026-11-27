@@ -76,6 +76,15 @@ def to_stash(path, pairs):
     return _swap(path, pairs, 1, 0)
 
 
+def same_file(whisparr_path, stash_path):
+    """Whether Whisparr's file and the Stash file are the same file. Whisparr renames
+    on import (and Stash follows), so an imported file has Whisparr's name, while a
+    download keeps its own."""
+    a = (whisparr_path or "").replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+    b = (stash_path or "").replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+    return bool(a) and a == b
+
+
 def box_ids(stash_ids, box):
     host = BOX_HOSTS[box]
     seen, out = set(), []
@@ -148,9 +157,13 @@ def hook_scene_update(conn, hook, log):
     # Skip the job when Whisparr already has this scene's file.
     try:
         base, api_key = whisparr_settings(raw)
+        scene = stash.gql("query ($id: ID!) { findScene(id: $id) { files { path } } }", {"id": str(hook.get("id"))})["findScene"]
+        stash_file = ((scene or {}).get("files") or [{}])[0].get("path") or ""
         for sid in ids:
             movie = whisparr(base, api_key, "GET", "/movie/" + urllib.parse.quote(sid), timeout=4, allow_404=True)
-            if movie and movie.get("hasFile"):
+            # Only when Whisparr's file is this very file: a second download of a
+            # scene Whisparr already has should still be offered as a replacement.
+            if movie and movie.get("hasFile") and same_file((movie.get("movieFile") or {}).get("path"), stash_file):
                 return "already imported in Whisparr"
     except Exception as e:  # unreachable Whisparr etc.: let the job report it properly
         log("d", "Quick Whisparr check failed, queueing the import anyway: %s" % e)
@@ -437,10 +450,13 @@ def import_scene(conn, scene_id, log, progress):
 
     progress(0.1)
     movie = ensure_movie(base, api_key, raw, ids[0], log)
-    if movie.get("hasFile"):
-        return "Whisparr already has a file for %s; nothing imported" % movie.get("title")
-
     stash_path = scene["files"][0]["path"]
+    existing = (movie.get("movieFile") or {}).get("path") or ""
+    if movie.get("hasFile") and same_file(existing, stash_path):
+        return "Whisparr already has this file for %s; nothing to import" % movie.get("title")
+    if movie.get("hasFile"):
+        log("i", "Whisparr already has %s for %s; offering this file as a replacement" % (existing or "a file", movie.get("title")))
+
     progress(0.25)
 
     # Find the file as Whisparr sees it. First through its queue item (Whisparr lists
