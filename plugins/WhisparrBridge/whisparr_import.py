@@ -551,9 +551,16 @@ def import_scene(conn, scene_id, log, progress):
         ],
     ) or [item]
     final = checked[0]
-    blocking = [r.get("reason") for r in final.get("rejections") or [] if str(r.get("type", "")).lower() == "permanent"]
-    if blocking:
-        raise RuntimeError("Whisparr won't import %s: %s" % (path, "; ".join(blocking)))
+    # Any rejection stops the import, like Whisparr's automatic import: permanent ones
+    # (not a quality or custom-format-score upgrade, sample, ...) and temporary ones
+    # (e.g. still unpacking), which a later tag or button press can retry.
+    rejections = final.get("rejections") or []
+    if rejections:
+        reasons = "; ".join(
+            "%s%s" % (r.get("reason"), " (try again later)" if str(r.get("type", "")).lower() == "temporary" else "")
+            for r in rejections
+        )
+        raise RuntimeError("Whisparr won't import %s: %s" % (path, reasons))
 
     progress(0.4)
     command = whisparr(
