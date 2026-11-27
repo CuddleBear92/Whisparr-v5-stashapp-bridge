@@ -8,16 +8,33 @@
 
 .wb-header {
   align-items: center;
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.35rem 0.75rem 0.35rem 0;
+}
+
+.wb-toggle {
+  align-items: center;
+  background: none;
+  border: 0;
+  color: inherit;
   cursor: pointer;
   display: flex;
+  flex: 1 1 auto;
   flex-wrap: wrap;
   gap: 0.5rem;
-  padding: 0.5rem 0.75rem;
+  padding: 0.15rem 0 0.15rem 0.75rem;
+  text-align: left;
   user-select: none;
 }
 
-.wb-header:focus {
-  outline: 1px solid rgba(255, 255, 255, 0.3);
+.wb-toggle:focus-visible {
+  outline: 1px solid rgba(255, 255, 255, 0.4);
+}
+
+.wb-preset-btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .wb-caret {
@@ -230,5 +247,76 @@
 
   .wb-year-disk {
     display: none;
+  }
+}
+
+.wb-success {
+  background: rgba(40, 167, 69, 0.15);
+  border-radius: 4px;
+  color: #7ee2a0;
+  margin-bottom: 0.5rem;
+  padding: 0.5rem 0.75rem;
+}
+
+/* Settings page */
+.wb-setting-value {
+  overflow-wrap: anywhere;
+}
+
+.wb-setting-controls {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+.wb-setting-controls .form-check-inline {
+  margin-right: 0.5rem;
+}
+
+.wb-form-row {
+  display: grid;
+  gap: 0 1rem;
+  grid-template-columns: 1fr 10rem;
+}
+
+.wb-modal .modal-footer {
+  flex-wrap: wrap;
+}
+
+.wb-modal h6 {
+  color: #9aa3ab;
+  font-size: 0.8rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+@media (max-width: 576px) {
+  .wb-form-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.wb-setting {
+  align-items: center;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+}
+
+.wb-setting h3 {
+  font-size: 1rem;
+  margin-bottom: 0.15rem;
+}
+
+.wb-setting > div:first-child {
+  min-width: 0;
+}
+
+@media (max-width: 576px) {
+  .wb-setting {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }

@@ -59,35 +59,40 @@ Copy the `plugins/WhisparrBridge` folder into your Stash `plugins` folder
 
 ## Settings
 
-**Settings › Plugins › Whisparr Bridge**:
+**Settings › Plugins › Whisparr Bridge** shows four rows:
 
-| Setting | Notes |
+| Row | What's in it |
 |---|---|
-| Whisparr host | IP/hostname **as seen from the Stash server**, e.g. `192.168.1.20`, `whisparr` (Docker), or a full `https://whisparr.example.com`. |
-| Whisparr port | `0` = default (`6969` for http, scheme default for an https URL). |
-| Whisparr URL base | Only if Whisparr has a URL base set, e.g. `/whisparr`. |
-| Whisparr API key | Required. |
-| Whisparr uses ThePornDB | Off = StashDB. The panel warns if this doesn't match what Whisparr reports. |
-| Whisparr link URL | Optional. Address your *browser* uses for the "Open in Whisparr" link, if different from the host above. |
-| Preset: Monitor scenes / Monitor movies / Monitor new items / Search on add | What **Apply preset** sets on a performer or studio. Until you save at least one of these four, the preset leaves the watch settings alone (Stash shows unsaved toggles as off). If Whisparr refuses Monitor movies (it needs a TMDB/TPDB link), the rest is still applied. |
-| Preset: years to monitor | `all` (or empty), `none` (leave years alone), `2020+`, `2018-2022`, `-2015` (up to 2015), `last 5` (this year and the 4 before), or a mix like `2015, 2019-2021`. |
-| Preset: unmonitor other years | Also unmonitor works from years outside the preset. Off = the preset only adds monitoring. |
-| Watched tag name | Stash tag for things monitored in Whisparr. Empty = `Whisparr Watched`. |
-| Don't manage the watched tag | Stops the plugin adding/removing the tag. |
-| Off on performer / studio / scene pages | Hide the plugin on that kind of page. |
+| **Whisparr connection** | Edit opens a window with host (as seen from the Stash server), port (empty = 6969), API key, Whisparr's stash-box (StashDB or ThePornDB), optional URL base and optional link URL for "Open in Whisparr". **Test connection** checks the details and warns if the stash-box doesn't match Whisparr's. |
+| **Show on** | Performers / Studios / Scenes switches for where the panel appears. |
+| **Preset** | On/off switch, and Edit for the preset window: Monitor scenes, Monitor movies, Monitor new items, Search on add, years to monitor (`all`, `none`, `2020+`, `2018-2022`, `-2015`, `last 5`, or a mix like `2015, 2019-2021`), unmonitor other years, and **Ask before applying**. |
+| **Watched tag** | On/off switch, Edit for the tag name, and **Sync library now** to tag the whole library. |
 
-To turn the whole plugin off, use the enable switch Stash shows next to each
-plugin under **Settings › Plugins**.
+With the preset on, performer and studio panels show **Apply preset** in their
+header, even when collapsed. It applies in one click and shows a summary of what
+changed; with **Ask before applying** on, it opens a preview first. If Whisparr
+refuses Monitor movies (it needs a TMDB/TPDB link), the rest is still applied.
+
+To turn the whole plugin off, use the Disable button Stash shows next to it.
+
+## How items are matched
+
+Only by **stash-box ID**, never by name. Whisparr v5 identifies performers,
+studios and scenes by their StashDB (or ThePornDB) ID. The plugin takes the
+Stash ID for that stash-box from the Stash item and asks Whisparr for exactly
+that ID. Items without one show "No StashDB ID" / "No ThePornDB ID".
 
 ## The "Whisparr Watched" tag
 
 The plugin keeps a Stash tag (default **Whisparr Watched**) on every performer,
 studio and scene that is monitored in Whisparr, and takes it off ones that are
 not, so you can filter for them in Stash. The tag is created the first time it's
-needed.
+needed, with Stash's Auto Tag switched off for it (an existing tag of that name
+gets Auto Tag switched off too), so only the plugin ever applies it.
 
 - Opening a performer, studio or scene page updates that item's tag.
-- **Settings › Tasks › Plugin Tasks › Sync Whisparr Watched tags** goes through
+- **Sync library now** in the plugin settings, or **Settings › Tasks › Plugin
+  Tasks › Sync Whisparr Watched tags**, goes through
   your whole library. Run it once after installing, and again whenever you want
   everything caught up (it can also be scheduled like any Stash task).
 

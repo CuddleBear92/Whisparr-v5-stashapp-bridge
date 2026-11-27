@@ -163,17 +163,29 @@ def monitored_ids(base, api_key, log):
 
 def find_tag(stash, name, create):
     data = stash.gql(
-        "query ($name: String!) { findTags(filter: { per_page: -1 }, tag_filter: { name: { value: $name, modifier: EQUALS } }) { tags { id name } } }",
+        "query ($name: String!) { findTags(filter: { per_page: -1 }, tag_filter: { name: { value: $name, modifier: EQUALS } }) { tags { id name ignore_auto_tag } } }",
         {"name": name},
     )
     for t in data["findTags"]["tags"]:
         if t["name"].lower() == name.lower():
+            # Auto Tag must never put this tag on anything: only the plugin manages it.
+            if not t.get("ignore_auto_tag"):
+                stash.gql(
+                    "mutation ($input: TagUpdateInput!) { tagUpdate(input: $input) { id } }",
+                    {"input": {"id": t["id"], "ignore_auto_tag": True}},
+                )
             return t["id"]
     if not create:
         return None
     created = stash.gql(
         "mutation ($input: TagCreateInput!) { tagCreate(input: $input) { id } }",
-        {"input": {"name": name, "description": "Monitored in Whisparr. Managed by the Whisparr Bridge plugin."}},
+        {
+            "input": {
+                "name": name,
+                "ignore_auto_tag": True,
+                "description": "Monitored in Whisparr. Managed by the Whisparr Bridge plugin.",
+            }
+        },
     )
     return created["tagCreate"]["id"]
 

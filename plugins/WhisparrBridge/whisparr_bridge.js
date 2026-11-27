@@ -84,7 +84,9 @@
       box: raw.useTpdb ? "tpdb" : "stashdb",
       yearPreset: String(raw.yearPreset || "").trim(),
       yearPresetUnmonitorOthers: !!raw.yearPresetUnmonitorOthers,
-      flagPreset: readFlagPreset(raw),
+      presetEnabled: isPresetEnabled(raw),
+      presetAskFirst: !!raw.presetAskFirst,
+      flagPreset: isPresetEnabled(raw) ? readFlagPreset(raw) : null,
       tagEnabled: !raw.disableWatchedTag,
       tagName: String(raw.watchedTagName || "").trim() || "Whisparr Watched",
       disabled: {
@@ -104,6 +106,12 @@
     { key: "whisparrMonitorNewItems", setting: "presetMonitorNewItems", label: "Monitor new items" },
     { key: "searchOnAdd", setting: "presetSearchOnAdd", label: "Search on add" },
   ];
+
+  // Before there was a "preset enabled" switch, saving any preset toggle turned it on.
+  function isPresetEnabled(raw) {
+    if (raw.presetEnabled !== undefined && raw.presetEnabled !== null) return !!raw.presetEnabled;
+    return readFlagPreset(raw) !== null;
+  }
 
   function readFlagPreset(raw) {
     if (!PRESET_FLAGS.some((f) => raw[f.setting] !== undefined && raw[f.setting] !== null)) return null;
@@ -259,15 +267,29 @@
     if (!tagIdPromises[key]) {
       tagIdPromises[key] = (async () => {
         const data = await stashGql(
-          "query ($name: String!) { findTags(filter: { per_page: -1 }, tag_filter: { name: { value: $name, modifier: EQUALS } }) { tags { id name } } }",
+          "query ($name: String!) { findTags(filter: { per_page: -1 }, tag_filter: { name: { value: $name, modifier: EQUALS } }) { tags { id name ignore_auto_tag } } }",
           { name }
         );
         const found = data.findTags.tags.find((t) => t.name.toLowerCase() === name.toLowerCase());
-        if (found) return found.id;
+        if (found) {
+          // Auto Tag must never put this tag on anything: only the plugin manages it.
+          if (!found.ignore_auto_tag) {
+            await stashGql("mutation ($input: TagUpdateInput!) { tagUpdate(input: $input) { id } }", {
+              input: { id: found.id, ignore_auto_tag: true },
+            });
+          }
+          return found.id;
+        }
         if (!create) return null;
         const created = await stashGql(
           "mutation ($input: TagCreateInput!) { tagCreate(input: $input) { id } }",
-          { input: { name, description: "Monitored in Whisparr. Managed by the Whisparr Bridge plugin." } }
+          {
+            input: {
+              name,
+              ignore_auto_tag: true,
+              description: "Monitored in Whisparr. Managed by the Whisparr Bridge plugin.",
+            },
+          }
         );
         return created.tagCreate.id;
       })().catch((err) => {
@@ -819,6 +841,63 @@
     return out.join(", ");
   }
 
+  // Works out what applying the preset would change. years: from groupWorksByYear.
+  function buildPresetPlan(settings, item, years) {
+    let preset = null;
+    try {
+      preset = parseYearPreset(settings.yearPreset);
+    } catch (err) {
+      return { error: err.message };
+    }
+    const [on, off] = planPreset(years, preset, settings.yearPresetUnmonitorOthers);
+    const flagChanges = settings.flagPreset
+      ? PRESET_FLAGS.filter((f) => !!item[f.key] !== settings.flagPreset[f.key]).map((f) => ({
+          key: f.key,
+          label: f.label,
+          to: settings.flagPreset[f.key],
+        }))
+      : [];
+    const count = (list) => list.reduce((n, x) => n + x.ids.length, 0);
+    const lines = [];
+    for (const c of flagChanges) lines.push("Turn " + (c.to ? "on" : "off") + " " + c.label + ".");
+    if (on.length) lines.push("Monitor " + count(on) + " works in " + describeYears(on) + ".");
+    if (off.length) lines.push("Unmonitor " + count(off) + " works in " + describeYears(off) + ".");
+    return { preset, on, off, flagChanges, lines };
+  }
+
+  // Applies a plan from buildPresetPlan. Returns warnings (things that were skipped).
+  async function executePresetPlan(settings, kind, item, plan) {
+    const k = KINDS[kind];
+    const warnings = [];
+    const ids = (list) => [].concat.apply([], list.map((x) => x.ids));
+    if (plan.flagChanges.length) {
+      const changes = {};
+      for (const c of plan.flagChanges) changes[c.key] = c.to;
+      try {
+        await whisparr(settings, "PUT", k.resource + "/" + item.id, Object.assign({}, item, changes));
+      } catch (err) {
+        // "Monitor movies" needs a TMDB/TPDB link on the stash-box; apply the rest without it.
+        if (!(changes.moviesMonitored && err.status === 400 && /movie|tmdb|tpdb/i.test(err.message))) throw err;
+        delete changes.moviesMonitored;
+        await whisparr(settings, "PUT", k.resource + "/" + item.id, Object.assign({}, item, changes));
+        warnings.push("Monitor movies was not turned on: " + err.message);
+      }
+    }
+    await setMonitored(settings, ids(plan.on), true);
+    await setMonitored(settings, ids(plan.off), false);
+    return warnings;
+  }
+
+  // One-click apply, used by the "Apply preset" button in the panel header.
+  async function quickApplyPreset(settings, kind, item) {
+    const works = await whisparr(settings, "GET", KINDS[kind].worksPath(item));
+    const plan = buildPresetPlan(settings, item, groupWorksByYear(works));
+    if (plan.error) throw new Error(plan.error + ". Fix it in the plugin's preset settings.");
+    if (!plan.lines.length) return { changed: false, lines: [], warnings: [] };
+    const warnings = await executePresetPlan(settings, kind, item, plan);
+    return { changed: true, lines: plan.lines, warnings };
+  }
+
   function YearsView({ kind, settings, item, showPreset, onChanged, onClose }) {
     const k = KINDS[kind];
     const Toast = PluginApi.hooks.useToast ? PluginApi.hooks.useToast() : null;
@@ -841,14 +920,6 @@
       };
     }, [loadKey]);
 
-    let preset = null;
-    let presetError = null;
-    try {
-      preset = parseYearPreset(settings.yearPreset);
-    } catch (err) {
-      presetError = err.message;
-    }
-
     async function toggleYear(y, monitored) {
       setBusyYear(y.year);
       try {
@@ -863,25 +934,11 @@
       }
     }
 
-    async function applyPreset(on, off, flagChanges) {
+    async function applyPreset(plan) {
       setApplying(true);
       try {
-        const ids = (list) => [].concat.apply([], list.map((x) => x.ids));
-        if (flagChanges.length) {
-          const changes = {};
-          for (const c of flagChanges) changes[c.key] = c.to;
-          try {
-            await whisparr(settings, "PUT", k.resource + "/" + item.id, Object.assign({}, item, changes));
-          } catch (err) {
-            // "Monitor movies" needs a TMDB/TPDB link on the stash-box; apply the rest without it.
-            if (!(changes.moviesMonitored && err.status === 400 && /movie|tmdb|tpdb/i.test(err.message))) throw err;
-            delete changes.moviesMonitored;
-            await whisparr(settings, "PUT", k.resource + "/" + item.id, Object.assign({}, item, changes));
-            if (Toast) Toast.error(new Error("Monitor movies was not turned on: " + err.message));
-          }
-        }
-        await setMonitored(settings, ids(on), true);
-        await setMonitored(settings, ids(off), false);
+        const warnings = await executePresetPlan(settings, kind, item, plan);
+        for (const w of warnings) if (Toast) Toast.error(new Error(w));
         if (Toast) Toast.success("Preset applied");
         setPresetOpen(false);
         setLoadKey((n) => n + 1);
@@ -914,22 +971,11 @@
     // ---- preset confirmation
     let presetBox = null;
     if (presetOpen) {
-      if (presetError) {
-        presetBox = h("div", { className: "wb-error" }, presetError + ". Fix it under Settings > Plugins > Whisparr Bridge.");
+      const plan = buildPresetPlan(settings, item, years);
+      if (plan.error) {
+        presetBox = h("div", { className: "wb-error" }, plan.error + ". Fix it in the plugin's preset settings.");
       } else {
-        const [on, off] = planPreset(years, preset, settings.yearPresetUnmonitorOthers);
-        const flagChanges = settings.flagPreset
-          ? PRESET_FLAGS.filter((f) => !!item[f.key] !== settings.flagPreset[f.key]).map((f) => ({
-              key: f.key,
-              label: f.label,
-              to: settings.flagPreset[f.key],
-            }))
-          : [];
-        const count = (list) => list.reduce((n, x) => n + x.ids.length, 0);
-        const lines = [];
-        for (const c of flagChanges) lines.push("Turn " + (c.to ? "on" : "off") + " " + c.label + ".");
-        if (on.length) lines.push("Monitor " + count(on) + " works in " + describeYears(on) + ".");
-        if (off.length) lines.push("Unmonitor " + count(off) + " works in " + describeYears(off) + ".");
+        const { preset, lines } = plan;
         const flagSummary = settings.flagPreset
           ? PRESET_FLAGS.map((f) => f.label + " " + (settings.flagPreset[f.key] ? "on" : "off")).join(" · ")
           : null;
@@ -957,7 +1003,7 @@
             lines.length
               ? h(
                   Button,
-                  { variant: "primary", size: "sm", disabled: applying, onClick: () => applyPreset(on, off, flagChanges) },
+                  { variant: "primary", size: "sm", disabled: applying, onClick: () => applyPreset(plan) },
                   applying ? h(Spinner, { animation: "border", size: "sm" }) : "Apply"
                 )
               : null,
@@ -1004,7 +1050,9 @@
         "div",
         { className: "wb-actions wb-years-head" },
         h("span", { className: "wb-grow text-muted" }, "Switching a year on monitors every work from that year."),
-        presetOpen ? null : h(Button, { variant: "primary", size: "sm", disabled: applying, onClick: () => setPresetOpen(true) }, "Apply preset"),
+        presetOpen || !settings.presetEnabled
+          ? null
+          : h(Button, { variant: "primary", size: "sm", disabled: applying, onClick: () => setPresetOpen(true) }, "Apply preset"),
         h(Button, { variant: "secondary", size: "sm", onClick: onClose }, "Back")
       ),
       h("div", { className: "wb-years" }, rows)
@@ -1079,6 +1127,7 @@
     const [mode, setMode] = useState("view");
     const [reloadKey, setReloadKey] = useState(0);
     const [busyCommand, setBusyCommand] = useState(null);
+    const [presetBusy, setPresetBusy] = useState(false);
 
     const reload = useCallback(() => {
       setMode("view");
@@ -1144,6 +1193,34 @@
         else alert(err.message);
       } finally {
         setBusyCommand(null);
+      }
+    }
+
+    async function onApplyPreset() {
+      const item = state.item;
+      if (settings.presetAskFirst) {
+        remember("open." + kind, true);
+        setOpen(true);
+        setMode("preset");
+        return;
+      }
+      setPresetBusy(true);
+      try {
+        const res = await quickApplyPreset(settings, kind, item);
+        for (const w of res.warnings) if (Toast) Toast.error(new Error(w));
+        if (Toast) {
+          Toast.success(
+            res.changed
+              ? "Preset applied: " + res.lines.join(" ").replace(/\.(?= )/g, ";")
+              : "Nothing to change: this " + k.label + " already matches the preset"
+          );
+        }
+        if (res.changed) setReloadKey((n) => n + 1);
+      } catch (err) {
+        if (Toast) Toast.error(err);
+        else alert(err.message);
+      } finally {
+        setPresetBusy(false);
       }
     }
 
@@ -1257,13 +1334,6 @@
                     k.hasChildren
                       ? h(Button, { variant: "secondary", size: "sm", onClick: () => setMode("years") }, "Years")
                       : null,
-                    k.hasChildren
-                      ? h(
-                          Button,
-                          { variant: "secondary", size: "sm", onClick: () => setMode("preset"), title: "Set the watch settings and monitored years from the preset in the plugin settings" },
-                          "Apply preset"
-                        )
-                      : null,
                     h(
                       Button,
                       {
@@ -1305,14 +1375,493 @@
       { className: "wb-panel wb-panel-" + kind },
       h(
         "div",
-        { className: "wb-header", role: "button", tabIndex: 0, onClick: toggleOpen, onKeyDown: (e) => (e.key === "Enter" ? toggleOpen() : null) },
-        h("span", { className: "wb-caret" }, open ? "▾" : "▸"),
-        h("span", { className: "wb-title" }, "Whisparr"),
-        h("span", { className: "wb-summary" }, summary)
+        { className: "wb-header" },
+        h(
+          "button",
+          { type: "button", className: "wb-toggle", "aria-expanded": open, onClick: toggleOpen },
+          h("span", { className: "wb-caret", "aria-hidden": true }, open ? "▾" : "▸"),
+          h("span", { className: "wb-title" }, "Whisparr"),
+          h("span", { className: "wb-summary" }, summary)
+        ),
+        settings && settings.presetEnabled && k.hasChildren && state.phase === "ready" && state.item
+          ? h(
+              Button,
+              {
+                variant: "primary",
+                size: "sm",
+                className: "wb-preset-btn",
+                disabled: presetBusy,
+                title: settings.presetAskFirst
+                  ? "Show what the preset would change, then apply it"
+                  : "Apply the preset from the plugin settings now",
+                onClick: onApplyPreset,
+              },
+              presetBusy ? h(Spinner, { animation: "border", size: "sm" }) : "Apply preset"
+            )
+          : null
       ),
       body ? h("div", { className: "wb-body" }, body) : null
     );
   }
+
+  // ---------------------------------------------------------------------------
+  // Settings page (replaces Stash's list of fields for this plugin)
+  // ---------------------------------------------------------------------------
+  //
+  // Values are stored exactly where Stash's own settings UI keeps them (the
+  // plugin's config, via configurePlugin), so the settings in the .yml file and
+  // this page always agree.
+
+  async function loadRawSettings() {
+    const data = await stashGql("query ($ids: [ID!]) { configuration { plugins(include: $ids) } }", { ids: [PLUGIN_ID] });
+    return (data.configuration.plugins || {})[PLUGIN_ID] || {};
+  }
+
+  async function saveRawSettings(raw) {
+    await stashGql("mutation ($id: ID!, $input: Map!) { configurePlugin(plugin_id: $id, input: $input) }", {
+      id: PLUGIN_ID,
+      input: raw,
+    });
+    settingsPromise = null;
+  }
+
+  function SettingRow({ title, value, description, children }) {
+    return h(
+      "div",
+      { className: "setting wb-setting" },
+      h(
+        "div",
+        null,
+        h("h3", null, title),
+        value ? h("div", { className: "value wb-setting-value" }, value) : null,
+        description ? h("div", { className: "sub-heading" }, description) : null
+      ),
+      h("div", { className: "wb-setting-controls" }, children)
+    );
+  }
+
+  function TextField({ id, label, value, onChange, type, placeholder, help }) {
+    return h(
+      Form.Group,
+      { controlId: id },
+      h(Form.Label, null, label),
+      h(Form.Control, {
+        type: type || "text",
+        value: value == null ? "" : value,
+        placeholder,
+        onChange: (e) => onChange(e.target.value),
+      }),
+      help ? h(Form.Text, { className: "text-muted" }, help) : null
+    );
+  }
+
+  function SettingsModal({ title, show, onHide, onSave, saving, children, extraButtons }) {
+    const { Modal } = Bootstrap;
+    return h(
+      Modal,
+      { show, onHide, size: "lg", className: "wb-modal" },
+      h(Modal.Header, { closeButton: true }, h(Modal.Title, null, title)),
+      h(Modal.Body, null, children),
+      h(
+        Modal.Footer,
+        null,
+        extraButtons,
+        h("span", { className: "wb-grow" }),
+        h(Button, { variant: "secondary", onClick: onHide, disabled: saving }, "Cancel"),
+        h(Button, { variant: "primary", onClick: onSave, disabled: saving }, saving ? h(Spinner, { animation: "border", size: "sm" }) : "Save")
+      )
+    );
+  }
+
+  function ConnectionModal({ raw, show, onHide, onSave }) {
+    const [form, setForm] = useState(raw);
+    const [showKey, setShowKey] = useState(false);
+    const [test, setTest] = useState(null);
+    const [saving, setSaving] = useState(false);
+    useEffect(() => {
+      if (show) {
+        setForm(raw);
+        setTest(null);
+      }
+    }, [show]);
+    const set = (patch) => setForm((f) => Object.assign({}, f, patch));
+
+    async function runTest() {
+      const s = normaliseSettings(form);
+      if (!s.baseUrl || !s.apiKey) {
+        setTest({ ok: false, message: "Fill in the host and API key first." });
+        return;
+      }
+      setTest({ busy: true });
+      try {
+        const status = await whisparr(s, "GET", "/system/status");
+        const source = await whisparr(s, "GET", "/config/metadatasource").catch(() => null);
+        const scene = source && String(source.sceneMetadataSource || "").toLowerCase();
+        const sourceName = scene === "tpdb" ? "ThePornDB" : scene ? "StashDB" : null;
+        const mismatch = scene && scene !== STASH_BOXES[s.box].whisparrName;
+        setTest({
+          ok: !mismatch,
+          message:
+            "Connected to " +
+            (status.instanceName || status.appName || "Whisparr") +
+            " " +
+            (status.version || "") +
+            " at " +
+            s.baseUrl +
+            "." +
+            (sourceName ? " Its scene source is " + sourceName + "." : "") +
+            (mismatch ? " Set the stash-box below to " + sourceName + " to match." : ""),
+        });
+      } catch (err) {
+        setTest({ ok: false, message: err.message });
+      }
+    }
+
+    async function save() {
+      setSaving(true);
+      try {
+        await onSave({
+          whisparrHost: String(form.whisparrHost || "").trim(),
+          whisparrPort: Number(form.whisparrPort) || 0,
+          whisparrUrlBase: String(form.whisparrUrlBase || "").trim(),
+          whisparrApiKey: String(form.whisparrApiKey || "").trim(),
+          useTpdb: !!form.useTpdb,
+          whisparrPublicUrl: String(form.whisparrPublicUrl || "").trim(),
+        });
+        onHide();
+      } finally {
+        setSaving(false);
+      }
+    }
+
+    return h(
+      SettingsModal,
+      {
+        title: "Whisparr connection",
+        show,
+        onHide,
+        onSave: save,
+        saving,
+        extraButtons: h(
+          Button,
+          { variant: "secondary", onClick: runTest, disabled: test && test.busy },
+          test && test.busy ? h(Spinner, { animation: "border", size: "sm" }) : "Test connection"
+        ),
+      },
+      h(
+        "div",
+        { className: "wb-form-row" },
+        h(TextField, {
+          id: "wb-set-host",
+          label: "Host",
+          value: form.whisparrHost,
+          onChange: (v) => set({ whisparrHost: v }),
+          placeholder: "192.168.1.20, whisparr or https://whisparr.example.com",
+          help: "As seen from the Stash server.",
+        }),
+        h(TextField, {
+          id: "wb-set-port",
+          label: "Port",
+          type: "number",
+          value: form.whisparrPort || "",
+          onChange: (v) => set({ whisparrPort: v }),
+          placeholder: "6969",
+          help: "Empty = 6969 (or the https default).",
+        })
+      ),
+      h(TextField, {
+        id: "wb-set-key",
+        label: "API key",
+        type: showKey ? "text" : "password",
+        value: form.whisparrApiKey,
+        onChange: (v) => set({ whisparrApiKey: v }),
+        help: "Whisparr > Settings > General > Security.",
+      }),
+      h(Form.Check, {
+        type: "checkbox",
+        id: "wb-set-showkey",
+        label: "Show API key",
+        checked: showKey,
+        onChange: (e) => setShowKey(e.target.checked),
+        className: "mb-3",
+      }),
+      h(Select, {
+        label: "Whisparr's scene metadata source (stash-box)",
+        value: form.useTpdb ? "tpdb" : "stashdb",
+        options: [
+          { value: "stashdb", label: "StashDB" },
+          { value: "tpdb", label: "ThePornDB" },
+        ],
+        onChange: (v) => set({ useTpdb: v === "tpdb" }),
+      }),
+      h(TextField, {
+        id: "wb-set-urlbase",
+        label: "URL base (optional)",
+        value: form.whisparrUrlBase,
+        onChange: (v) => set({ whisparrUrlBase: v }),
+        placeholder: "/whisparr",
+        help: "Only if Whisparr has a URL base set.",
+      }),
+      h(TextField, {
+        id: "wb-set-public",
+        label: "Link URL (optional)",
+        value: form.whisparrPublicUrl,
+        onChange: (v) => set({ whisparrPublicUrl: v }),
+        placeholder: "http://192.168.1.20:6969",
+        help: "Address your browser uses for \"Open in Whisparr\", if different from the above.",
+      }),
+      test && !test.busy ? h("div", { className: test.ok ? "wb-success" : "wb-error" }, test.message) : null
+    );
+  }
+
+  function PresetModal({ raw, show, onHide, onSave }) {
+    const initial = () => {
+      const flags = readFlagPreset(raw) || { monitored: true, moviesMonitored: false, whisparrMonitorNewItems: true, searchOnAdd: false };
+      return {
+        flags,
+        yearPreset: String(raw.yearPreset || ""),
+        yearPresetUnmonitorOthers: !!raw.yearPresetUnmonitorOthers,
+        presetAskFirst: !!raw.presetAskFirst,
+      };
+    };
+    const [form, setForm] = useState(initial);
+    const [saving, setSaving] = useState(false);
+    useEffect(() => {
+      if (show) setForm(initial());
+    }, [show]);
+    const set = (patch) => setForm((f) => Object.assign({}, f, patch));
+    const setFlag = (key, v) => setForm((f) => Object.assign({}, f, { flags: Object.assign({}, f.flags, { [key]: v }) }));
+
+    let yearsNote;
+    let yearsError = false;
+    try {
+      yearsNote = "Monitors: " + parseYearPreset(form.yearPreset).label;
+    } catch (err) {
+      yearsNote = err.message;
+      yearsError = true;
+    }
+
+    async function save() {
+      if (yearsError) return;
+      setSaving(true);
+      try {
+        const patch = {
+          yearPreset: form.yearPreset.trim(),
+          yearPresetUnmonitorOthers: form.yearPresetUnmonitorOthers,
+          presetAskFirst: form.presetAskFirst,
+        };
+        for (const f of PRESET_FLAGS) patch[f.setting] = !!form.flags[f.key];
+        await onSave(patch);
+        onHide();
+      } finally {
+        setSaving(false);
+      }
+    }
+
+    const flagHelp = {
+      monitored: "Monitor to automatically have items added to the library",
+      moviesMonitored: "Needs a TMDB/TPDB link on the stash-box; if Whisparr refuses it, the rest still applies",
+      whisparrMonitorNewItems: "Newly discovered works are added monitored",
+      searchOnAdd: "Search for scenes when they are added to the library",
+    };
+
+    return h(
+      SettingsModal,
+      { title: "Preset", show, onHide, onSave: save, saving },
+      h("p", { className: "text-muted" }, "What \"Apply preset\" sets on a performer or studio. The Add form also starts from these."),
+      h("h6", null, "Watch settings"),
+      PRESET_FLAGS.map((f) =>
+        h(Switch, {
+          key: f.key,
+          id: "wb-set-" + f.setting,
+          label: f.label,
+          checked: form.flags[f.key],
+          onChange: (v) => setFlag(f.key, v),
+          help: flagHelp[f.key],
+        })
+      ),
+      h("h6", { className: "mt-3" }, "Years"),
+      h(
+        Form.Group,
+        { controlId: "wb-set-years" },
+        h(Form.Label, null, "Years to monitor"),
+        h(Form.Control, {
+          type: "text",
+          value: form.yearPreset,
+          placeholder: "all",
+          isInvalid: yearsError,
+          onChange: (e) => set({ yearPreset: e.target.value }),
+        }),
+        h(
+          Form.Text,
+          { className: yearsError ? "text-danger" : "text-muted" },
+          yearsNote,
+          h("br"),
+          "Examples: all, none, 2020+, 2018-2022, -2015, last 5, or a mix like 2015, 2019-2021. Empty = all; none leaves years alone."
+        )
+      ),
+      h(Switch, {
+        id: "wb-set-unmonitor",
+        label: "Unmonitor other years",
+        checked: form.yearPresetUnmonitorOthers,
+        onChange: (v) => set({ yearPresetUnmonitorOthers: v }),
+        help: "Off = the preset only adds monitoring",
+      }),
+      h("h6", { className: "mt-3" }, "Applying"),
+      h(Switch, {
+        id: "wb-set-askfirst",
+        label: "Ask before applying",
+        checked: form.presetAskFirst,
+        onChange: (v) => set({ presetAskFirst: v }),
+        help: "Off = the Apply preset button applies straight away. On = it shows what will change first.",
+      })
+    );
+  }
+
+  function TagModal({ raw, show, onHide, onSave }) {
+    const [name, setName] = useState(raw.watchedTagName || "");
+    const [saving, setSaving] = useState(false);
+    useEffect(() => {
+      if (show) setName(raw.watchedTagName || "");
+    }, [show]);
+    async function save() {
+      setSaving(true);
+      try {
+        await onSave({ watchedTagName: name.trim() });
+        onHide();
+      } finally {
+        setSaving(false);
+      }
+    }
+    return h(
+      SettingsModal,
+      { title: "Watched tag", show, onHide, onSave: save, saving },
+      h(TextField, {
+        id: "wb-set-tagname",
+        label: "Tag name",
+        value: name,
+        onChange: setName,
+        placeholder: "Whisparr Watched",
+        help:
+          "Kept on performers, studios and scenes that are monitored in Whisparr. Created when first needed, with Auto Tag switched off for it. Renaming leaves the old tag as it is.",
+      })
+    );
+  }
+
+  async function startTagSync(Toast) {
+    try {
+      await stashGql(
+        "mutation ($id: ID!, $task: String) { runPluginTask(plugin_id: $id, task_name: $task) }",
+        { id: PLUGIN_ID, task: "Sync Whisparr Watched tags" }
+      );
+      if (Toast) Toast.success("Library sync started. Progress shows in Stash's job queue.");
+    } catch (err) {
+      if (Toast) Toast.error(err);
+      else alert(err.message);
+    }
+  }
+
+  function BridgeSettings() {
+    const Toast = PluginApi.hooks.useToast ? PluginApi.hooks.useToast() : null;
+    const [raw, setRaw] = useState(null);
+    const [error, setError] = useState(null);
+    const [modal, setModal] = useState(null);
+
+    useEffect(() => {
+      loadRawSettings().then(setRaw, (err) => setError(err.message));
+    }, []);
+
+    async function save(patch) {
+      const next = Object.assign({}, raw, patch);
+      try {
+        await saveRawSettings(next);
+        setRaw(next);
+      } catch (err) {
+        if (Toast) Toast.error(err);
+        throw err;
+      }
+    }
+
+    if (error) return h("div", { className: "wb-error" }, "Could not load the Whisparr Bridge settings: " + error);
+    if (!raw) return h("div", { className: "wb-loading" }, h(Spinner, { animation: "border", size: "sm" }));
+
+    const s = normaliseSettings(raw);
+    const connValue = s.baseUrl ? s.baseUrl + " · " + STASH_BOXES[s.box].label + (s.apiKey ? "" : " · no API key") : "Not set up";
+    let presetValue = null;
+    if (s.presetEnabled) {
+      const flags = readFlagPreset(raw);
+      let years;
+      try {
+        years = parseYearPreset(s.yearPreset).label;
+      } catch (e) {
+        years = "invalid (" + s.yearPreset + ")";
+      }
+      presetValue =
+        (flags ? PRESET_FLAGS.filter((f) => flags[f.key]).map((f) => f.label).join(", ") || "all watch settings off" : "watch settings not set") +
+        " · Years: " +
+        years +
+        (s.yearPresetUnmonitorOthers ? " (others unmonitored)" : "") +
+        " · " +
+        (s.presetAskFirst ? "asks first" : "one click");
+    }
+
+    const switchFor = (id, label, checked, onChange) =>
+      h(Form.Check, { type: "switch", id, label, checked, onChange: (e) => onChange(e.target.checked), inline: true });
+
+    return h(
+      "div",
+      { className: "plugin-settings wb-settings" },
+      h(
+        SettingRow,
+        { title: "Whisparr connection", value: connValue, description: "Where Whisparr v5 is and which stash-box it uses." },
+        h(Button, { variant: "secondary", size: "sm", onClick: () => setModal("connection") }, "Edit")
+      ),
+      h(
+        SettingRow,
+        { title: "Show on", description: "Which Stash pages get the Whisparr panel." },
+        switchFor("wb-show-performer", "Performers", !raw.disablePerformers, (v) => save({ disablePerformers: !v })),
+        switchFor("wb-show-studio", "Studios", !raw.disableStudios, (v) => save({ disableStudios: !v })),
+        switchFor("wb-show-scene", "Scenes", !raw.disableScenes, (v) => save({ disableScenes: !v }))
+      ),
+      h(
+        SettingRow,
+        {
+          title: "Preset",
+          value: presetValue,
+          description: "Adds an \"Apply preset\" button to performer and studio panels that sets their watch settings and monitored years.",
+        },
+        switchFor("wb-preset-enabled", s.presetEnabled ? "On" : "Off", s.presetEnabled, (v) => save({ presetEnabled: v })),
+        h(Button, { variant: "secondary", size: "sm", onClick: () => setModal("preset") }, "Edit")
+      ),
+      h(
+        SettingRow,
+        {
+          title: "Watched tag",
+          value: s.tagEnabled ? "Tag: " + s.tagName : null,
+          description: "Keeps a Stash tag on performers, studios and scenes that are monitored in Whisparr, so you can filter for them.",
+        },
+        switchFor("wb-tag-enabled", s.tagEnabled ? "On" : "Off", s.tagEnabled, (v) => save({ disableWatchedTag: !v })),
+        h(Button, { variant: "secondary", size: "sm", onClick: () => setModal("tag") }, "Edit"),
+        h(
+          Button,
+          { variant: "secondary", size: "sm", disabled: !s.tagEnabled, onClick: () => startTagSync(Toast), title: "Check every performer, studio and scene now" },
+          "Sync library now"
+        )
+      ),
+      h(ConnectionModal, { raw, show: modal === "connection", onHide: () => setModal(null), onSave: save }),
+      h(PresetModal, { raw, show: modal === "preset", onHide: () => setModal(null), onSave: save }),
+      h(TagModal, { raw, show: modal === "tag", onHide: () => setModal(null), onSave: save })
+    );
+  }
+
+  // "instead" patches get the component's arguments followed by the next render function.
+  PluginApi.patch.instead("PluginSettings", function () {
+    const args = Array.prototype.slice.call(arguments);
+    const next = args.pop();
+    const props = args[0];
+    if (props && props.pluginID === PLUGIN_ID) return h(BridgeSettings, props);
+    return next.apply(this, args);
+  });
 
   // ---------------------------------------------------------------------------
   // Hook into Stash pages
