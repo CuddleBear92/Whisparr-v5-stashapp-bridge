@@ -159,8 +159,8 @@ have a file for it yet, a background job (visible in Stash's job queue):
    scene. The Stash-side folder comes from your mappings, the prefix learned in
    step 2, or a Stash library whose folder name appears in Whisparr's path
    (e.g. Whisparr `/synology/whisparr/…` and Stash library `/data/whisparr`).
-   It has to be inside one of Stash's library paths. The job waits for the
-   scan and checks the scene: if Whisparr copied or hardlinked instead of moving
+   It has to be inside one of Stash's library paths. A short follow-up job runs
+   after the scan (Stash runs jobs one at a time, in order) and checks the scene: if Whisparr copied or hardlinked instead of moving
    (e.g. a download that's still seeding), the new file becomes the scene's main
    file. If the scene still points at the old path, the result says so.
 

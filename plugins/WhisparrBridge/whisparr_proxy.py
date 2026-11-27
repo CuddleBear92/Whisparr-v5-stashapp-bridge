@@ -100,6 +100,20 @@ def main():
                 respond(error="Import into Whisparr failed: %s" % e)
         return
 
+    if args.get("mode") == "relinkScene":
+        import whisparr_import
+
+        scene_id = str(args.get("sceneId") or "")
+        try:
+            message = whisparr_import.relink_scene(payload.get("server_connection") or {}, args, log)
+            whisparr_import.record_result(scene_id, True, message, log)
+            respond(message)
+        except Exception as e:
+            log("e", "Relinking scene %s failed: %s" % (scene_id, e))
+            whisparr_import.record_result(scene_id, False, str(e), log)
+            respond(error=str(e))
+        return
+
     if args.get("mode") == "syncTags":
         import whisparr_tasks
 
