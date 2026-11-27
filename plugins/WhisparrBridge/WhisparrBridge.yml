@@ -1,6 +1,6 @@
 name: Whisparr Bridge
 description: Shows and manages performers, studios and scenes in Whisparr v5 from their Stash pages.
-version: 0.7.2
+version: 0.7.3
 url: https://github.com/CuddleBear92/Whisparr-v5-stashapp-bridge
 
 ui:

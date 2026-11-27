@@ -332,6 +332,54 @@ def wait_for_command(base, api_key, command_id, log):
     return "timeout", "Whisparr did not finish the import within %d minutes" % (COMMAND_TIMEOUT // 60)
 
 
+SCAN_TIMEOUT = 15 * 60
+
+
+def wait_for_job(stash, job_id):
+    deadline = time.time() + SCAN_TIMEOUT
+    while time.time() < deadline:
+        job = stash.gql("query ($id: ID!) { findJob(input: { id: $id }) { status error } }", {"id": job_id})["findJob"]
+        # A finished job can drop out of the list; treat that as done.
+        if not job or job["status"] in ("FINISHED", "CANCELLED", "FAILED"):
+            return (job or {}).get("status", "FINISHED"), (job or {}).get("error")
+        time.sleep(2)
+    return "TIMEOUT", None
+
+
+def rescan_and_relink(stash, scene_id, folder, file_name, old_path, log, progress):
+    """Scans the folder Whisparr moved the file to, waits, and makes sure the Stash
+    scene now uses the file at its new path. Returns a short report."""
+    new_path = folder.rstrip("/\\") + ("\\" if "\\" in folder else "/") + file_name
+    log("i", "Scanning %s in Stash" % folder)
+    job_id = stash.gql("mutation ($input: ScanMetadataInput!) { metadataScan(input: $input) }", {"input": {"paths": [folder]}})[
+        "metadataScan"
+    ]
+    progress(0.9)
+    status, error = wait_for_job(stash, job_id)
+    if status != "FINISHED":
+        return "Stash's scan of %s ended with %s%s" % (folder, status.lower(), (": " + error) if error else "")
+
+    scene = stash.gql("query ($id: ID!) { findScene(id: $id) { files { id path } } }", {"id": scene_id})["findScene"]
+    files = (scene or {}).get("files") or []
+    match = next((f for f in files if _norm(f["path"]) == _norm(new_path)), None)
+    if match is None:
+        log("w", "After scanning %s, scene %s still has: %s" % (folder, scene_id, ", ".join(f["path"] for f in files)))
+        return (
+            "Stash scanned %s but the scene still points at %s. Check that this folder is inside one of Stash's "
+            "library paths, or add a path mapping for Whisparr's root folder" % (folder, files[0]["path"] if files else old_path)
+        )
+    if files and files[0]["id"] != match["id"]:
+        # Whisparr copied or hardlinked (e.g. a download still seeding), so Stash
+        # added the new path as a second file: make it the scene's main file.
+        stash.gql(
+            "mutation ($input: SceneUpdateInput!) { sceneUpdate(input: $input) { id } }",
+            {"input": {"id": scene_id, "primary_file_id": match["id"]}},
+        )
+        log("i", "Made %s the scene's main file" % new_path)
+        return "Stash now uses %s as the scene's main file (the old copy at %s is still there)" % (new_path, old_path)
+    return "Stash now points at %s" % new_path
+
+
 def import_scene(conn, scene_id, log, progress):
     stash = Stash(conn)
     raw = plugin_settings(stash)
@@ -472,9 +520,7 @@ def import_scene(conn, scene_id, log, progress):
     if raw.get("importRescan") is not False:
         folder = stash_folder_for(stash, new_path, pairs, log)
         if folder:
-            stash.gql("mutation ($input: ScanMetadataInput!) { metadataScan(input: $input) }", {"input": {"paths": [folder]}})
-            scanned = "; Stash is scanning %s" % folder
-            log("i", "Started a Stash scan of %s" % folder)
+            scanned = "; " + rescan_and_relink(stash, scene_id, folder, _name(new_path), stash_path, log, progress)
         else:
             scanned = "; couldn't work out where Stash sees %s, so no scan was started (add a path mapping)" % new_path
             log("w", "No Stash folder found for %s; add a path mapping for Whisparr's root folder" % new_path)
