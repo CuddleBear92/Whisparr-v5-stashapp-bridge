@@ -1128,6 +1128,71 @@
     );
   }
 
+  // "Delete scene" on the scene tab: deletes the scene in Stash and handles it in
+  // Whisparr in one go.
+  const useHistorySafe =
+    (PluginApi.libraries.ReactRouterDOM && PluginApi.libraries.ReactRouterDOM.useHistory) || (() => null);
+
+  function DeleteSceneForm({ settings, entity, onCancel }) {
+    const Toast = PluginApi.hooks.useToast ? PluginApi.hooks.useToast() : null;
+    const history = useHistorySafe();
+    const [whisparrAction, setWhisparrAction] = useState(settings.onSceneDelete !== "none" ? settings.onSceneDelete : "exclude");
+    const [deleteFile, setDeleteFile] = useState(true);
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState(null);
+
+    async function run() {
+      setBusy(true);
+      setError(null);
+      try {
+        // Whisparr first: once the scene is gone from Stash its IDs can't be read any more.
+        await applySceneWhisparrAction(settings, entity, whisparrAction);
+        await stashGql("mutation ($input: ScenesDestroyInput!) { scenesDestroy(input: $input) }", {
+          input: { ids: [entity.id], delete_file: deleteFile, delete_generated: true },
+        });
+        if (Toast) Toast.success("Scene deleted" + (whisparrAction === "exclude" ? " and excluded in Whisparr" : whisparrAction === "unmonitor" ? " and unmonitored in Whisparr" : ""));
+        if (history) history.push("/scenes");
+      } catch (err) {
+        setError(err.message);
+        setBusy(false);
+      }
+    }
+
+    return h(
+      "div",
+      { className: "wb-form" },
+      h("div", { className: "wb-warning" }, "Deletes this scene from Stash and handles it in Whisparr. This can't be undone."),
+      h(Select, {
+        label: "In Whisparr",
+        value: whisparrAction,
+        options: [
+          { value: "exclude", label: "Remove it and add an import exclusion (never re-added)" },
+          { value: "unmonitor", label: "Unmonitor it (stays listed, not searched for)" },
+          { value: "none", label: "Leave it as it is" },
+        ],
+        onChange: setWhisparrAction,
+      }),
+      h(Switch, {
+        id: "wb-delscene-file",
+        label: "Delete the file from disk",
+        checked: deleteFile,
+        onChange: setDeleteFile,
+        help: "Off = only the Stash entry is removed",
+      }),
+      error ? h("div", { className: "wb-error" }, error) : null,
+      h(
+        "div",
+        { className: "wb-actions" },
+        h(
+          Button,
+          { variant: "danger", size: "sm", disabled: busy, onClick: run },
+          busy ? h(Spinner, { animation: "border", size: "sm" }) : "Delete scene"
+        ),
+        h(Button, { variant: "secondary", size: "sm", disabled: busy, onClick: onCancel }, "Cancel")
+      )
+    );
+  }
+
   // ---------------------------------------------------------------------------
   // Status view
   // ---------------------------------------------------------------------------
@@ -1400,6 +1465,8 @@
             mismatch,
             mode === "edit"
               ? h(EditForm, { kind, settings, meta, item, onSaved: reload, onCancel: () => setMode("view") })
+              : mode === "deleteScene"
+              ? h(DeleteSceneForm, { settings, entity, onCancel: () => setMode("view") })
               : mode === "delete"
               ? h(DeleteForm, { kind, settings, item, onDeleted: reload, onCancel: () => setMode("view") })
               : mode === "years" || mode === "preset"
@@ -1451,7 +1518,19 @@
                         )
                       : null,
                     h("span", { className: "wb-grow" }),
-                    h(Button, { variant: "outline-danger", size: "sm", onClick: () => setMode("delete") }, "Remove")
+                    h(Button, { variant: "outline-danger", size: "sm", onClick: () => setMode("delete") }, "Remove"),
+                    kind === "scene"
+                      ? h(
+                          Button,
+                          {
+                            variant: "danger",
+                            size: "sm",
+                            onClick: () => setMode("deleteScene"),
+                            title: "Delete this scene in Stash and remove or unmonitor it in Whisparr",
+                          },
+                          "Delete scene…"
+                        )
+                      : null
                   )
                 )
           );
@@ -1551,6 +1630,28 @@
   // setting, unmonitors it in Whisparr, or removes it there and adds an import
   // exclusion so a studio/performer refresh never adds it back. Files are left
   // alone (Stash already handled them).
+  // Unmonitors, or removes-and-excludes, every Whisparr scene matching the Stash
+  // scene's IDs. Files are left alone. Returns the titles it changed; throws on failure.
+  async function applySceneWhisparrAction(settings, scene, action) {
+    const changed = [];
+    if (action === "none" || !settings.baseUrl || !settings.apiKey) return changed;
+    for (const id of findStashIds(scene, settings.box)) {
+      const movie = await whisparr(settings, "GET", "/movie/" + encodeURIComponent(id)).catch((err) => {
+        if (err.status === 404) return null;
+        throw err;
+      });
+      if (!movie || !movie.id) continue;
+      if (action === "unmonitor") {
+        if (movie.monitored) await whisparr(settings, "PATCH", "/movie/" + movie.id, { monitored: false });
+      } else {
+        await whisparr(settings, "DELETE", "/movie/" + movie.id + "?deleteFiles=false&addImportExclusion=true");
+      }
+      changed.push(movie.title);
+    }
+    return changed;
+  }
+
+  // Called after the scene is deleted with the Delete button on its Stash page.
   async function handleSceneDeleted(scene) {
     let settings;
     try {
@@ -1558,24 +1659,11 @@
     } catch (e) {
       return;
     }
-    if (settings.onSceneDelete === "none" || !settings.baseUrl || !settings.apiKey) return;
-    for (const id of findStashIds(scene, settings.box)) {
-      try {
-        const movie = await whisparr(settings, "GET", "/movie/" + encodeURIComponent(id)).catch((err) => {
-          if (err.status === 404) return null;
-          throw err;
-        });
-        if (!movie || !movie.id) continue;
-        if (settings.onSceneDelete === "unmonitor") {
-          if (movie.monitored) await whisparr(settings, "PATCH", "/movie/" + movie.id, { monitored: false });
-          console.info("[WhisparrBridge] unmonitored deleted scene in Whisparr:", movie.title);
-        } else {
-          await whisparr(settings, "DELETE", "/movie/" + movie.id + "?deleteFiles=false&addImportExclusion=true");
-          console.info("[WhisparrBridge] removed and excluded deleted scene in Whisparr:", movie.title);
-        }
-      } catch (err) {
-        console.error("[WhisparrBridge] could not update Whisparr for the deleted scene", err);
-      }
+    try {
+      const changed = await applySceneWhisparrAction(settings, scene, settings.onSceneDelete);
+      if (changed.length) console.info("[WhisparrBridge] " + settings.onSceneDelete + " in Whisparr after delete:", changed);
+    } catch (err) {
+      console.error("[WhisparrBridge] could not update Whisparr for the deleted scene", err);
     }
   }
 

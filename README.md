@@ -108,6 +108,10 @@ you delete a scene with the **Delete** button on that scene's page in Stash:
 - *Remove it from Whisparr and exclude it*: removed, with an import exclusion, so
   a followed studio or performer never adds it back. Files are not touched.
 
+The scene's **Whisparr tab** also has **Delete scene…**: it removes/excludes (or
+unmonitors) the scene in Whisparr and deletes it in Stash in one go, with a
+choice to keep or delete the file.
+
 Deletes from the duplicate checker, bulk deletes from scene lists and files
 deleted outside Stash are deliberately **not** affected. For files that disappear
 some other way, Whisparr's own **Settings › Media Management › Unmonitor Deleted
