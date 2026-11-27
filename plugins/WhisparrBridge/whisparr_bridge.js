@@ -103,9 +103,39 @@
   const PRESET_FLAGS = [
     { key: "monitored", setting: "presetMonitorScenes", label: "Monitor scenes" },
     { key: "moviesMonitored", setting: "presetMonitorMovies", label: "Monitor movies" },
+    // Only offered by Whisparr when its source is ThePornDB and the performer/studio has JAV.
+    { key: "javMonitored", setting: "presetMonitorJav", label: "Monitor JAV", jav: true },
     { key: "whisparrMonitorNewItems", setting: "presetMonitorNewItems", label: "Monitor new items" },
     { key: "searchOnAdd", setting: "presetSearchOnAdd", label: "Search on add" },
   ];
+
+  // Whisparr shows "Monitor JAV" only when its scene source is ThePornDB and the
+  // performer/studio has JAV there.
+  function javApplies(meta, item) {
+    return !!(meta && meta.source && meta.source.javAvailable && item && item.hasJav);
+  }
+
+  // The watch settings that apply to this performer/studio.
+  function watchFlagsFor(meta, item) {
+    return PRESET_FLAGS.filter((f) => !f.jav || javApplies(meta, item));
+  }
+
+  // Summary for the panel header: how many watch settings are on, and a light:
+  // red = not monitored, green = everything matches the preset (or, without a
+  // preset, everything is on), yellow = monitored but something differs.
+  function watchStatus(settings, meta, item) {
+    const flags = watchFlagsFor(meta, item);
+    const on = flags.filter((f) => !!item[f.key]);
+    const target = settings.flagPreset || null;
+    const differs = flags.filter((f) => (target ? !!item[f.key] !== target[f.key] : !item[f.key]));
+    const level = !item.monitored ? "red" : differs.length ? "yellow" : "green";
+    const lines = flags.map((f) => f.label + ": " + (item[f.key] ? "on" : "off"));
+    let note;
+    if (!item.monitored) note = "Not monitored";
+    else if (!differs.length) note = target ? "Matches the preset" : "Everything is on";
+    else note = (target ? "Differs from the preset: " : "Off: ") + differs.map((f) => f.label).join(", ");
+    return { on: on.length, total: flags.length, level, title: lines.join("\n") + "\n\n" + note };
+  }
 
   // Before there was a "preset enabled" switch, saving any preset toggle turned it on.
   function isPresetEnabled(raw) {
@@ -454,7 +484,7 @@
   // Forms
   // ---------------------------------------------------------------------------
 
-  function monitorFields(kind, form, set, idPrefix) {
+  function monitorFields(kind, form, set, idPrefix, showJav) {
     const fields = [
       h(Switch, {
         key: "monitored",
@@ -475,6 +505,16 @@
           onChange: (v) => set({ moviesMonitored: v }),
           help: "Also follow full-length movies (needs a TMDB/TPDB link on the stash-box)",
         }),
+        showJav
+          ? h(Switch, {
+              key: "javMonitored",
+              id: idPrefix + "-jav",
+              label: "Monitor JAV",
+              checked: form.javMonitored,
+              onChange: (v) => set({ javMonitored: v }),
+              help: "Also follow Japanese Adult Video titles from ThePornDB",
+            })
+          : null,
         h(Switch, {
           key: "monitorNew",
           id: idPrefix + "-new",
@@ -506,6 +546,7 @@
       qualityProfileId: recall("qualityProfileId", meta.profiles[0] ? meta.profiles[0].id : 0),
       monitored: settings.flagPreset ? settings.flagPreset.monitored : true,
       moviesMonitored: settings.flagPreset ? settings.flagPreset.moviesMonitored : false,
+      javMonitored: settings.flagPreset ? settings.flagPreset.javMonitored : false,
       whisparrMonitorNewItems: settings.flagPreset ? settings.flagPreset.whisparrMonitorNewItems : true,
       afterDate: null,
       tags: [],
@@ -518,6 +559,20 @@
 
     const rootOk = meta.rootFolders.some((r) => r.path === form.rootFolderPath);
     const profileOk = meta.profiles.some((p) => p.id === Number(form.qualityProfileId));
+
+    // Whisparr asks the metadata source per item whether it has JAV.
+    const [showJav, setShowJav] = useState(false);
+    useEffect(() => {
+      if (!k.hasChildren || !(meta.source && meta.source.javAvailable)) return;
+      let cancelled = false;
+      whisparr(settings, "GET", "/lookup/" + kind + "/" + encodeURIComponent(stashId) + "/hasjav").then(
+        (res) => !cancelled && setShowJav(!!(res && res.hasJav)),
+        () => {}
+      );
+      return () => {
+        cancelled = true;
+      };
+    }, [kind, stashId]);
 
     async function add() {
       setBusy(true);
@@ -545,7 +600,7 @@
         if (k.hasChildren) {
           Object.assign(body, {
             moviesMonitored: form.moviesMonitored,
-            javMonitored: false,
+            javMonitored: showJav && !!form.javMonitored,
             whisparrMonitorNewItems: form.whisparrMonitorNewItems,
             afterDate: form.afterDate,
             searchOnAdd: form.search,
@@ -590,7 +645,7 @@
         options: (profileOk ? [] : [{ value: "", label: "Choose…" }]).concat(meta.profiles.map((p) => ({ value: p.id, label: p.name }))),
         onChange: (v) => set({ qualityProfileId: Number(v) }),
       }),
-      monitorFields(kind, form, set, "wb-add-" + kind),
+      monitorFields(kind, form, set, "wb-add-" + kind, showJav),
       h(TagPicker, { tags: meta.tags, value: form.tags, onChange: (v) => set({ tags: v }) }),
       h(Switch, {
         id: "wb-add-search-" + kind,
@@ -617,6 +672,7 @@
     const [form, setForm] = useState(() => ({
       monitored: item.monitored,
       moviesMonitored: item.moviesMonitored,
+      javMonitored: !!item.javMonitored,
       whisparrMonitorNewItems: item.whisparrMonitorNewItems,
       afterDate: item.afterDate || null,
       searchOnAdd: !!item.searchOnAdd,
@@ -643,6 +699,7 @@
             afterDate: form.afterDate,
             searchOnAdd: form.searchOnAdd,
           });
+          if (javApplies(meta, item)) body.javMonitored = form.javMonitored;
         }
         await whisparr(settings, "PUT", k.resource + "/" + item.id, body);
         onSaved();
@@ -655,7 +712,7 @@
     return h(
       "div",
       { className: "wb-form" },
-      monitorFields(kind, form, set, "wb-edit-" + kind),
+      monitorFields(kind, form, set, "wb-edit-" + kind, javApplies(meta, item)),
       k.hasChildren
         ? h(Switch, {
             id: "wb-edit-search-" + kind,
@@ -842,7 +899,7 @@
   }
 
   // Works out what applying the preset would change. years: from groupWorksByYear.
-  function buildPresetPlan(settings, item, years) {
+  function buildPresetPlan(settings, item, years, meta) {
     let preset = null;
     try {
       preset = parseYearPreset(settings.yearPreset);
@@ -851,7 +908,7 @@
     }
     const [on, off] = planPreset(years, preset, settings.yearPresetUnmonitorOthers);
     const flagChanges = settings.flagPreset
-      ? PRESET_FLAGS.filter((f) => !!item[f.key] !== settings.flagPreset[f.key]).map((f) => ({
+      ? watchFlagsFor(meta, item).filter((f) => !!item[f.key] !== settings.flagPreset[f.key]).map((f) => ({
           key: f.key,
           label: f.label,
           to: settings.flagPreset[f.key],
@@ -889,16 +946,16 @@
   }
 
   // One-click apply, used by the "Apply preset" button in the panel header.
-  async function quickApplyPreset(settings, kind, item) {
+  async function quickApplyPreset(settings, kind, item, meta) {
     const works = await whisparr(settings, "GET", KINDS[kind].worksPath(item));
-    const plan = buildPresetPlan(settings, item, groupWorksByYear(works));
+    const plan = buildPresetPlan(settings, item, groupWorksByYear(works), meta);
     if (plan.error) throw new Error(plan.error + ". Fix it in the plugin's preset settings.");
     if (!plan.lines.length) return { changed: false, lines: [], warnings: [] };
     const warnings = await executePresetPlan(settings, kind, item, plan);
     return { changed: true, lines: plan.lines, warnings };
   }
 
-  function YearsView({ kind, settings, item, showPreset, onChanged, onClose }) {
+  function YearsView({ kind, settings, item, meta, showPreset, onChanged, onClose }) {
     const k = KINDS[kind];
     const Toast = PluginApi.hooks.useToast ? PluginApi.hooks.useToast() : null;
     const [years, setYears] = useState(null);
@@ -971,13 +1028,13 @@
     // ---- preset confirmation
     let presetBox = null;
     if (presetOpen) {
-      const plan = buildPresetPlan(settings, item, years);
+      const plan = buildPresetPlan(settings, item, years, meta);
       if (plan.error) {
         presetBox = h("div", { className: "wb-error" }, plan.error + ". Fix it in the plugin's preset settings.");
       } else {
         const { preset, lines } = plan;
         const flagSummary = settings.flagPreset
-          ? PRESET_FLAGS.map((f) => f.label + " " + (settings.flagPreset[f.key] ? "on" : "off")).join(" · ")
+          ? watchFlagsFor(meta, item).map((f) => f.label + " " + (settings.flagPreset[f.key] ? "on" : "off")).join(" · ")
           : null;
         presetBox = h(
           "div",
@@ -1076,7 +1133,9 @@
         { key: "mon", label: "Monitoring" },
         h(Pill, { on: item.monitored }, item.monitored ? "Monitored" : "Unmonitored"),
         k.hasChildren ? h(Pill, { on: item.moviesMonitored }, "Movies") : null,
-        k.hasChildren ? h(Pill, { on: item.whisparrMonitorNewItems }, "New items") : null
+        k.hasChildren && javApplies(meta, item) ? h(Pill, { on: item.javMonitored }, "JAV") : null,
+        k.hasChildren ? h(Pill, { on: item.whisparrMonitorNewItems }, "New items") : null,
+        k.hasChildren ? h(Pill, { on: item.searchOnAdd }, "Search on add") : null
       ),
       h(Row, { key: "qp", label: "Quality profile" }, profile ? profile.name : "#" + item.qualityProfileId),
     ];
@@ -1206,7 +1265,7 @@
       }
       setPresetBusy(true);
       try {
-        const res = await quickApplyPreset(settings, kind, item);
+        const res = await quickApplyPreset(settings, kind, item, state.meta);
         for (const w of res.warnings) if (Toast) Toast.error(new Error(w));
         if (Toast) {
           Toast.success(
@@ -1241,7 +1300,27 @@
         Fragment,
         null,
         h(Pill, { on: true }, "In Whisparr"),
-        h(Pill, { on: state.item.monitored }, state.item.monitored ? "Monitored" : "Unmonitored"),
+        k.hasChildren
+          ? (() => {
+              const st = watchStatus(settings, state.meta, state.item);
+              return h(
+                "span",
+                {
+                  className: "wb-watch wb-watch-" + st.level,
+                  title: st.title,
+                  "aria-label":
+                    "Watch settings " +
+                    st.on +
+                    " of " +
+                    st.total +
+                    " on, " +
+                    { red: "not monitored", green: "all as wanted", yellow: "differs from the preset" }[st.level],
+                },
+                h("span", { className: "wb-dot", "aria-hidden": true }),
+                st.on + "/" + st.total
+              );
+            })()
+          : h(Pill, { on: state.item.monitored }, state.item.monitored ? "Monitored" : "Unmonitored"),
         kind === "scene" ? h(Pill, { on: !!state.item.hasFile }, state.item.hasFile ? "Downloaded" : "Missing") : null
       );
 
@@ -1319,6 +1398,7 @@
                   kind,
                   settings,
                   item,
+                  meta,
                   showPreset: mode === "preset",
                   onChanged: () => setReloadKey((n) => n + 1),
                   onClose: () => setMode("view"),
@@ -1616,7 +1696,13 @@
 
   function PresetModal({ raw, show, onHide, onSave }) {
     const initial = () => {
-      const flags = readFlagPreset(raw) || { monitored: true, moviesMonitored: false, whisparrMonitorNewItems: true, searchOnAdd: false };
+      const flags = readFlagPreset(raw) || {
+        monitored: true,
+        moviesMonitored: false,
+        javMonitored: false,
+        whisparrMonitorNewItems: true,
+        searchOnAdd: false,
+      };
       return {
         flags,
         yearPreset: String(raw.yearPreset || ""),
@@ -1661,6 +1747,7 @@
     const flagHelp = {
       monitored: "Monitor to automatically have items added to the library",
       moviesMonitored: "Needs a TMDB/TPDB link on the stash-box; if Whisparr refuses it, the rest still applies",
+      javMonitored: "Only used where Whisparr offers it: ThePornDB as source, and the performer/studio has JAV",
       whisparrMonitorNewItems: "Newly discovered works are added monitored",
       searchOnAdd: "Search for scenes when they are added to the library",
     };

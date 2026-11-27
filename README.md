@@ -65,8 +65,18 @@ Copy the `plugins/WhisparrBridge` folder into your Stash `plugins` folder
 |---|---|
 | **Whisparr connection** | Edit opens a window with host (as seen from the Stash server), port (empty = 6969), API key, Whisparr's stash-box (StashDB or ThePornDB), optional URL base and optional link URL for "Open in Whisparr". **Test connection** checks the details and warns if the stash-box doesn't match Whisparr's. |
 | **Show on** | Performers / Studios / Scenes switches for where the panel appears. |
-| **Preset** | On/off switch, and Edit for the preset window: Monitor scenes, Monitor movies, Monitor new items, Search on add, years to monitor (`all`, `none`, `2020+`, `2018-2022`, `-2015`, `last 5`, or a mix like `2015, 2019-2021`), unmonitor other years, and **Ask before applying**. |
+| **Preset** | On/off switch, and Edit for the preset window: Monitor scenes, Monitor movies, Monitor JAV, Monitor new items, Search on add, years to monitor (`all`, `none`, `2020+`, `2018-2022`, `-2015`, `last 5`, or a mix like `2015, 2019-2021`), unmonitor other years, and **Ask before applying**. |
 | **Watched tag** | On/off switch, Edit for the tag name, and **Sync library now** to tag the whole library. |
+
+Performer and studio panel headers show the watch settings at a glance, even
+when collapsed: a counter such as **3/4** (Monitor scenes, Monitor movies,
+Monitor JAV where available, Monitor new items, Search on add) and a light.
+Green = matches the preset (or, with no preset, everything is on), yellow =
+monitored but something differs, red = not monitored. Hover it for details.
+
+**Monitor JAV** appears (in the panel, Edit/Add forms and the preset) only where
+Whisparr offers it: when its scene source is ThePornDB and the performer or
+studio has JAV there.
 
 With the preset on, performer and studio panels show **Apply preset** in their
 header, even when collapsed. It applies in one click and shows a summary of what

@@ -320,3 +320,52 @@
     flex-direction: column;
   }
 }
+
+/* Watch status in the panel header: light + "on/total" */
+.wb-watch {
+  align-items: center;
+  border-radius: 999px;
+  display: inline-flex;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  gap: 0.35rem;
+  line-height: 1.4;
+  padding: 0 0.55rem 0 0.45rem;
+}
+
+.wb-dot {
+  border-radius: 50%;
+  display: inline-block;
+  height: 0.6rem;
+  width: 0.6rem;
+}
+
+.wb-watch-green {
+  background: rgba(40, 167, 69, 0.25);
+  color: #7ee2a0;
+}
+
+.wb-watch-green .wb-dot {
+  background: #3ddc6f;
+  box-shadow: 0 0 4px #3ddc6f;
+}
+
+.wb-watch-yellow {
+  background: rgba(255, 193, 7, 0.18);
+  color: #f3d57a;
+}
+
+.wb-watch-yellow .wb-dot {
+  background: #ffc107;
+  box-shadow: 0 0 4px #ffc107;
+}
+
+.wb-watch-red {
+  background: rgba(220, 53, 69, 0.2);
+  color: #f19ca4;
+}
+
+.wb-watch-red .wb-dot {
+  background: #e5414f;
+  box-shadow: 0 0 4px #e5414f;
+}

@@ -1,6 +1,6 @@
 name: Whisparr Bridge
 description: Shows and manages performers, studios and scenes in Whisparr v5 from their Stash pages.
-version: 0.4.0
+version: 0.5.0
 url: https://github.com/CuddleBear92/Whisparr-v5-stashapp-bridge
 
 ui:
@@ -67,6 +67,10 @@ settings:
   presetMonitorMovies:
     displayName: "Preset: Monitor movies"
     description: Needs a TMDB/TPDB link on the stash-box. If Whisparr refuses it, the rest of the preset is still applied.
+    type: BOOLEAN
+  presetMonitorJav:
+    displayName: "Preset: Monitor JAV"
+    description: Only used where Whisparr offers it (ThePornDB as source, and the performer/studio has JAV).
     type: BOOLEAN
   presetMonitorNewItems:
     displayName: "Preset: Monitor new items"

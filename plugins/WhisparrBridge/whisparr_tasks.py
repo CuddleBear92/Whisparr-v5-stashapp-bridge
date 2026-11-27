@@ -115,29 +115,26 @@ def whisparr(base, api_key, method, path, body=None):
         with urllib.request.urlopen(req, timeout=300) as res:
             return json.loads(res.read().decode("utf-8") or "null")
     except urllib.error.HTTPError as e:
-        raise RuntimeError("Whisparr answered %s %s with HTTP %d" % (method, path, e.code))
+        detail = e.read().decode("utf-8", errors="replace")[:300]
+        raise RuntimeError("Whisparr answered %s %s with HTTP %d %s" % (method, path, e.code, detail))
     except urllib.error.URLError as e:
         raise RuntimeError("Could not reach Whisparr at %s: %s" % (base, e.reason))
 
 
-def monitored_ids(base, api_key, log):
-    performers = whisparr(base, api_key, "GET", "/performer") or []
-    perf = {
-        p["foreignId"].lower()
-        for p in performers
-        if p.get("monitored") and p.get("foreignId") and str(p.get("visibility", "")).lower() != "hidden"
-    }
-    studios = whisparr(base, api_key, "GET", "/studio") or []
-    stud = {s["foreignId"].lower() for s in studios if s.get("monitored") and s.get("foreignId")}
+def monitored_paged(base, api_key, resource, label, log):
+    """foreignIds of monitored items, using Whisparr's paged, filtered endpoint.
 
-    scenes = set()
+    Asking only for monitored items matters: Whisparr v5 also keeps every
+    performer seen in a scene (hidden), so the full lists can be huge.
+    """
+    ids = set()
     page = 1
     while True:
         res = whisparr(
             base,
             api_key,
             "POST",
-            "/movie/paged",
+            resource + "/paged",
             {
                 "page": page,
                 "pageSize": WHISPARR_PAGE,
@@ -147,13 +144,29 @@ def monitored_ids(base, api_key, log):
         records = res.get("records") or []
         for m in records:
             if m.get("monitored") and m.get("foreignId"):
-                scenes.add(m["foreignId"].lower())
-        if not records or page * WHISPARR_PAGE >= (res.get("totalRecords") or 0):
-            break
+                ids.add(m["foreignId"].lower())
+        total = res.get("totalRecords") or 0
+        if page == 1 or page % 10 == 0:
+            log("i", "Whisparr %s: read %d of %d monitored" % (label, min(page * WHISPARR_PAGE, total), total))
+        if not records or page * WHISPARR_PAGE >= total:
+            return ids
         page += 1
 
-    log("i", "Whisparr monitors %d performers, %d studios and %d scenes/movies" % (len(perf), len(stud), len(scenes)))
-    return {"performer": perf, "studio": stud, "scene": scenes}
+
+def monitored_ids(base, api_key, log):
+    result = {}
+    for kind, resource, label in (
+        ("performer", "/performer", "performers"),
+        ("studio", "/studio", "studios"),
+        ("scene", "/movie", "scenes/movies"),
+    ):
+        result[kind] = monitored_paged(base, api_key, resource, label, log)
+    log(
+        "i",
+        "Whisparr monitors %d performers, %d studios and %d scenes/movies"
+        % (len(result["performer"]), len(result["studio"]), len(result["scene"])),
+    )
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +257,8 @@ def sync_watched_tags(conn, log):
         seen = 0
         for item in stash.all(kind):
             seen += 1
+            if seen % 5000 == 0:
+                log("i", "Stash %ss: %d checked so far" % (kind, seen))
             tags = [t["id"] for t in item.get("tags") or []]
             tags_by_id[item["id"]] = tags
             sid = next(
