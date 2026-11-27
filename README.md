@@ -106,6 +106,10 @@ gets Auto Tag switched off too), so only the plugin ever applies it.
   your whole library. Run it once after installing, and again whenever you want
   everything caught up (it can also be scheduled like any Stash task).
 
+The library sync goes through your Stash performers, studios and scenes in
+batches of 500 and asks Whisparr about just those IDs, so the progress bar moves
+steadily and tags are written as it goes (stopping it keeps what's done).
+
 Items without a Stash ID from Whisparr's stash-box are never tagged. If you
 rename the tag in the settings, the old tag is left as it is.
 

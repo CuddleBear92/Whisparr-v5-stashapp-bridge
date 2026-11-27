@@ -18,7 +18,6 @@ import urllib.request
 PLUGIN_ID = "WhisparrBridge"
 DEFAULT_TAG = "Whisparr Watched"
 STASH_PAGE = 500
-WHISPARR_PAGE = 1000
 UPDATE_CHUNK = 250
 BOX_HOSTS = {"stashdb": "stashdb.org", "tpdb": "theporndb.net"}
 
@@ -58,18 +57,23 @@ class Stash:
             raise RuntimeError("; ".join(e.get("message", str(e)) for e in body["errors"]))
         return body["data"]
 
-    def all(self, kind):
-        """Yields every performer/studio/scene as {id, stash_ids, tags}."""
+    def count(self, kind):
+        name = "find%ss" % kind.capitalize()
+        return self.gql("query { %s(filter: { per_page: 1 }) { count } }" % name)[name]["count"]
+
+    def pages(self, kind):
+        """Yields pages of performers/studios/scenes as lists of {id, stash_ids, tags}."""
+        name = "find%ss" % kind.capitalize()
         query = (
-            "query ($filter: FindFilterType) { find%s(filter: $filter) { count %s { id stash_ids { endpoint stash_id } tags { id } } } }"
-            % (kind.capitalize() + "s", kind + "s")
+            "query ($filter: FindFilterType) { %s(filter: $filter) { count %s { id stash_ids { endpoint stash_id } tags { id } } } }"
+            % (name, kind + "s")
         )
         page = 1
         while True:
-            data = self.gql(query, {"filter": {"page": page, "per_page": STASH_PAGE}})["find%ss" % kind.capitalize()]
+            data = self.gql(query, {"filter": {"page": page, "per_page": STASH_PAGE, "sort": "id", "direction": "ASC"}})[name]
             items = data[kind + "s"]
-            for item in items:
-                yield item
+            if items:
+                yield items
             if not items or page * STASH_PAGE >= data["count"]:
                 return
             page += 1
@@ -121,57 +125,21 @@ def whisparr(base, api_key, method, path, body=None):
         raise RuntimeError("Could not reach Whisparr at %s: %s" % (base, e.reason))
 
 
-def monitored_paged(base, api_key, resource, label, log):
-    """foreignIds of monitored items, using Whisparr's paged, filtered endpoint.
-
-    Asking only for monitored items matters: Whisparr v5 also keeps every
-    performer seen in a scene (hidden), so the full lists can be huge.
-    """
-    ids = set()
-    page = 1
-    while True:
-        res = whisparr(
-            base,
-            api_key,
-            "POST",
-            resource + "/paged",
-            {
-                "page": page,
-                "pageSize": WHISPARR_PAGE,
-                "filters": [{"key": "monitored", "type": "equal", "value": True}],
-            },
-        )
-        records = res.get("records") or []
-        for m in records:
-            if m.get("monitored") and m.get("foreignId"):
-                ids.add(m["foreignId"].lower())
-        total = res.get("totalRecords") or 0
-        if page == 1 or page % 10 == 0:
-            log("i", "Whisparr %s: read %d of %d monitored" % (label, min(page * WHISPARR_PAGE, total), total))
-        if not records or page * WHISPARR_PAGE >= total:
-            return ids
-        page += 1
+# Whisparr endpoints that take a list of foreign IDs and return the matching items
+# it has (unknown IDs are left out).
+LOOKUP_PATHS = {"performer": "/performer/list", "studio": "/studio/list", "scene": "/movie/list"}
 
 
-def monitored_ids(base, api_key, log):
-    result = {}
-    for kind, resource, label in (
-        ("performer", "/performer", "performers"),
-        ("studio", "/studio", "studios"),
-        ("scene", "/movie", "scenes/movies"),
-    ):
-        result[kind] = monitored_paged(base, api_key, resource, label, log)
-    log(
-        "i",
-        "Whisparr monitors %d performers, %d studios and %d scenes/movies"
-        % (len(result["performer"]), len(result["studio"]), len(result["scene"])),
-    )
-    return result
-
-
-# ---------------------------------------------------------------------------
-# Sync
-# ---------------------------------------------------------------------------
+def watched_among(base, api_key, kind, stash_ids):
+    """The subset of stash_ids (lower-cased) that Whisparr has and monitors."""
+    if not stash_ids:
+        return set()
+    items = whisparr(base, api_key, "POST", LOOKUP_PATHS[kind], stash_ids) or []
+    return {
+        m["foreignId"].lower()
+        for m in items
+        if m.get("monitored") and m.get("foreignId") and str(m.get("visibility", "")).lower() != "hidden"
+    }
 
 
 def find_tag(stash, name, create):
@@ -243,46 +211,64 @@ def sync_watched_tags(conn, log):
     host = BOX_HOSTS[box]
     base, api_key = whisparr_settings(raw)
 
-    log("i", "Reading monitored items from Whisparr at %s" % base)
-    progress(0.02)
-    watched = monitored_ids(base, api_key, log)
-    progress(0.15)
+    kinds = ["performer", "studio", "scene"]
+    totals = {kind: stash.count(kind) for kind in kinds}
+    grand_total = max(1, sum(totals.values()))
+    log(
+        "i",
+        "Checking %d performers, %d studios and %d scenes against Whisparr at %s"
+        % (totals["performer"], totals["studio"], totals["scene"], base),
+    )
+    progress(0.0)
 
     tag_id = find_tag(stash, tag_name, create=False)
+    done = 0
     summary = []
-    kinds = ["performer", "studio", "scene"]
-    for n, kind in enumerate(kinds):
-        log("i", "Checking Stash %ss" % kind)
-        add, remove, tags_by_id = [], [], {}
-        seen = 0
-        for item in stash.all(kind):
-            seen += 1
-            if seen % 5000 == 0:
-                log("i", "Stash %ss: %d checked so far" % (kind, seen))
-            tags = [t["id"] for t in item.get("tags") or []]
-            tags_by_id[item["id"]] = tags
-            sid = next(
-                (s["stash_id"] for s in item.get("stash_ids") or [] if host in (s.get("endpoint") or "").lower()),
-                None,
-            )
-            should = bool(sid) and sid.lower() in watched[kind]
-            has = tag_id is not None and tag_id in tags
-            if should and not has:
-                add.append(item["id"])
-            elif has and not should:
-                remove.append(item["id"])
+    for kind in kinds:
+        seen = tagged = untagged = 0
+        for items in stash.pages(kind):
+            # Stash items with an ID from Whisparr's stash-box
+            sid_by_item = {}
+            for item in items:
+                sid = next(
+                    (s["stash_id"] for s in item.get("stash_ids") or [] if host in (s.get("endpoint") or "").lower()),
+                    None,
+                )
+                if sid:
+                    sid_by_item[item["id"]] = sid.lower()
+            watched = watched_among(base, api_key, kind, sorted(set(sid_by_item.values())))
 
-        if add and tag_id is None:
-            tag_id = find_tag(stash, tag_name, create=True)
-            log("i", 'Created tag "%s"' % tag_name)
-        if add:
-            bulk_tag(stash, kind, add, tag_id, "ADD", tags_by_id)
-        if remove:
-            bulk_tag(stash, kind, remove, tag_id, "REMOVE", tags_by_id)
+            add, remove, tags_by_id = [], [], {}
+            for item in items:
+                tags = [t["id"] for t in item.get("tags") or []]
+                tags_by_id[item["id"]] = tags
+                should = sid_by_item.get(item["id"]) in watched
+                has = tag_id is not None and tag_id in tags
+                if should and not has:
+                    add.append(item["id"])
+                elif has and not should:
+                    remove.append(item["id"])
 
-        line = "%ss: %d checked, %d tagged, %d untagged" % (kind.capitalize(), seen, len(add), len(remove))
+            if add and tag_id is None:
+                tag_id = find_tag(stash, tag_name, create=True)
+                log("i", 'Created tag "%s"' % tag_name)
+            # Written per page, so tags appear while the job runs and a stopped job keeps its work.
+            if add:
+                bulk_tag(stash, kind, add, tag_id, "ADD", tags_by_id)
+            if remove:
+                bulk_tag(stash, kind, remove, tag_id, "REMOVE", tags_by_id)
+
+            seen += len(items)
+            tagged += len(add)
+            untagged += len(remove)
+            done += len(items)
+            progress(done / grand_total)
+            if seen % (STASH_PAGE * 20) == 0:
+                log("i", "%ss: %d of %d checked, %d tagged, %d untagged so far" % (kind.capitalize(), seen, totals[kind], tagged, untagged))
+
+        line = "%ss: %d checked, %d tagged, %d untagged" % (kind.capitalize(), seen, tagged, untagged)
         log("i", line)
         summary.append(line)
-        progress(0.15 + 0.85 * (n + 1) / len(kinds))
 
+    progress(1.0)
     return 'Whisparr Watched tag sync done ("%s"). %s' % (tag_name, "; ".join(summary))
