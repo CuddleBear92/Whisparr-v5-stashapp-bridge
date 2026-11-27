@@ -2115,7 +2115,7 @@
       h(
         Form.Group,
         { controlId: "wb-set-mappings" },
-        h(Form.Label, null, "Path mappings"),
+        h(Form.Label, null, "Path mappings (optional)"),
         h(Form.Control, {
           as: "textarea",
           rows: 3,
@@ -2129,7 +2129,7 @@
           { className: badLines.length ? "text-danger" : "text-muted" },
           badLines.length
             ? "Each line needs the form  Stash path => Whisparr path  (\"" + badLines[0] + "\")"
-            : "One per line: Stash path => Whisparr path. Needed when Stash and Whisparr see the same folders under different paths (e.g. different Docker mounts). Used both ways."
+            : "Usually not needed: the plugin finds files through Whisparr's download folder (Activity > Queue) and matches Whisparr's root folder to a Stash library by folder name. Add one per line (Stash path => Whisparr path) only if an import says Whisparr can't see the file or no Stash scan was started."
         )
       ),
       metaError ? h("div", { className: "wb-warning" }, metaError) : null,

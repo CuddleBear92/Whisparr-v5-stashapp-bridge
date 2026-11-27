@@ -146,14 +146,21 @@ have a file for it yet, a background job (visible in Stash's job queue):
 
 1. adds the scene to Whisparr if needed (root folder/profile from the settings
    window) and monitors it, if that's on;
-2. maps the Stash file path to the path Whisparr sees (**path mappings**, one
-   `Stash path => Whisparr path` per line, used both ways);
+2. works out the path Whisparr sees for the file: your **path mappings** if set
+   (`Stash path => Whisparr path`, one per line), else Whisparr's download folder
+   as listed in Activity › Queue (matched by release folder or file name), else
+   the same path as Stash;
 3. checks the file with Whisparr's manual import for that scene, and stops with
    Whisparr's reason if it would refuse it (e.g. not an upgrade);
 4. imports it with **move**, so Whisparr renames and moves it as usual, and
    clears it from Activity › Queue when it came from a download;
 5. scans the new folder in Stash, so Stash follows the moved file and keeps the
-   scene (the folder has to be inside one of Stash's library paths).
+   scene. The Stash-side folder comes from your mappings, the prefix learned in
+   step 2, or a Stash library whose folder name appears in Whisparr's path
+   (e.g. Whisparr `/synology/whisparr/…` and Stash library `/data/whisparr`).
+   It has to be inside one of Stash's library paths.
+
+In most setups no path mappings are needed.
 
 The scene's Whisparr tab also has **Import file into Whisparr** to do this by
 hand. Saves that don't change stash IDs return straight away, but the hook still

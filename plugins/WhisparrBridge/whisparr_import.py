@@ -177,14 +177,88 @@ def ensure_movie(base, api_key, raw, sid, log):
     return movie
 
 
-def queue_download_id(base, api_key, path):
-    """downloadId of the Activity > Queue item whose output contains this file, if any."""
+def _norm(path):
+    return (path or "").replace("\\", "/").rstrip("/")
+
+
+def _name(path):
+    return posixpath.basename(_norm(path))
+
+
+def queue_records(base, api_key):
     res = whisparr(base, api_key, "GET", "/queue?page=1&pageSize=2000&includeUnknownMovieItems=true") or {}
-    norm = path.replace("\\", "/")
-    for rec in res.get("records") or []:
-        out = (rec.get("outputPath") or "").replace("\\", "/").rstrip("/")
+    return [r for r in res.get("records") or [] if r.get("outputPath")]
+
+
+def queue_download_id(records, path):
+    """downloadId of the Activity > Queue item whose output contains this (Whisparr-side) file."""
+    norm = _norm(path)
+    for rec in records:
+        out = _norm(rec.get("outputPath"))
         if out and (norm == out or norm.startswith(out + "/")) and rec.get("downloadId"):
             return rec["downloadId"]
+    return None
+
+
+def path_candidates(stash_path, pairs, records):
+    """Where Whisparr might see this file, most specific first: [(path, how)]."""
+    out = []
+    mapped = to_whisparr(stash_path, pairs)
+    if mapped != stash_path:
+        out.append((mapped, "path mappings"))
+    # Whisparr's download folder, as listed in Activity > Queue: the Stash file is
+    # either the queue item's output itself or inside a folder with the same name.
+    file_name = _name(stash_path)
+    parent_name = _name(posixpath.dirname(_norm(stash_path)))
+    for rec in records:
+        out_path = _norm(rec.get("outputPath"))
+        name = _name(out_path)
+        if name and name == parent_name:
+            out.append((out_path + "/" + file_name, "Whisparr's download folder"))
+        elif name and name == file_name:
+            out.append((out_path, "Whisparr's download folder"))
+    out.append((stash_path, "the same path as Stash"))
+    seen, unique = set(), []
+    for path, how in out:
+        if path not in seen:
+            seen.add(path)
+            unique.append((path, how))
+    return unique
+
+
+def learned_pair(stash_path, whisparr_path):
+    """The differing prefixes of two paths to the same file, e.g. ('/media/dl', '/downloads')."""
+    a, b = _norm(stash_path).split("/"), _norm(whisparr_path).split("/")
+    while a and b and a[-1] == b[-1]:
+        a.pop()
+        b.pop()
+    if not a or not b or a == b:
+        return None
+    return ("/".join(a) or "/", "/".join(b) or "/")
+
+
+def stash_folder_for(stash, whisparr_path, pairs, log):
+    """The Stash-side folder of a Whisparr path, for the rescan. None when unknown."""
+    folder = posixpath.dirname(_norm(whisparr_path))
+    mapped = to_stash(folder, pairs)
+    if mapped != folder:
+        return mapped
+    libraries = [
+        _norm(s.get("path"))
+        for s in (stash.gql("query { configuration { general { stashes { path } } } }")["configuration"]["general"]["stashes"] or [])
+    ]
+    # Same path in both (shared mounts)?
+    for lib in libraries:
+        if folder == lib or folder.startswith(lib + "/"):
+            return folder
+    # Otherwise match a library folder by name, e.g. Whisparr /synology/whisparr/Studio
+    # and Stash library /data/whisparr -> /data/whisparr/Studio.
+    parts = folder.split("/")
+    for lib in libraries:
+        name = _name(lib)
+        if name and name in parts:
+            idx = len(parts) - 1 - parts[::-1].index(name)
+            return lib + "/" + "/".join(parts[idx + 1 :]) if idx + 1 < len(parts) else lib
     return None
 
 
@@ -226,24 +300,37 @@ def import_scene(conn, scene_id, log, progress):
         return "Whisparr already has a file for %s; nothing imported" % movie.get("title")
 
     stash_path = scene["files"][0]["path"]
-    path = to_whisparr(stash_path, pairs)
-    log("i", "Importing %s as %s" % (path, movie.get("title")))
     progress(0.25)
 
-    download_id = queue_download_id(base, api_key, path)
-    items = whisparr(
-        base,
-        api_key,
-        "GET",
-        "/manualimport?folder=%s&movieId=%d&filterExistingFiles=false" % (urllib.parse.quote(path), movie["id"]),
-    ) or []
-    item = next((i for i in items if (i.get("path") or "").replace("\\", "/") == path.replace("\\", "/")), None)
-    if item is None and len(items) == 1:
-        item = items[0]
+    # Find the path under which Whisparr sees this file.
+    records = queue_records(base, api_key)
+    path = item = None
+    tried = []
+    for candidate, how in path_candidates(stash_path, pairs, records):
+        tried.append(candidate)
+        items = whisparr(
+            base,
+            api_key,
+            "GET",
+            "/manualimport?folder=%s&movieId=%d&filterExistingFiles=false" % (urllib.parse.quote(candidate), movie["id"]),
+        ) or []
+        found = next((i for i in items if _norm(i.get("path")) == _norm(candidate)), None)
+        if found is None and len(items) == 1:
+            found = items[0]
+        if found is not None:
+            path, item = candidate, found
+            log("i", "Whisparr sees the file as %s (found via %s)" % (path, how))
+            break
     if item is None:
         raise RuntimeError(
-            "Whisparr can't see %s. Check the path mappings in the plugin settings (Stash path => Whisparr path)." % path
+            "Whisparr can't see the file. Tried: %s. Add a path mapping in the plugin settings (Stash path => Whisparr path)."
+            % ", ".join(tried)
         )
+    pair = learned_pair(stash_path, path)
+    if pair and pair not in pairs:
+        pairs = pairs + [pair]
+    download_id = queue_download_id(records, path)
+    log("i", "Importing %s as %s%s" % (path, movie.get("title"), " (download %s)" % download_id if download_id else ""))
 
     # Re-check the file against this scene (quality, upgrade rules, ...).
     checked = whisparr(
@@ -299,16 +386,17 @@ def import_scene(conn, scene_id, log, progress):
     new_path = ((movie.get("movieFile") or {}).get("path")) or ""
     if not movie.get("hasFile") or not new_path:
         raise RuntimeError("Whisparr finished, but %s still has no file. See Whisparr's log." % movie.get("title"))
-    stash_new = to_stash(new_path, pairs)
     log("i", "Whisparr imported it to %s" % new_path)
 
     scanned = ""
     if raw.get("importRescan") is not False:
-        folder = posixpath.dirname(stash_new.replace("\\", "/"))
-        if "\\" in stash_new:
-            folder = folder.replace("/", "\\")
-        stash.gql("mutation ($input: ScanMetadataInput!) { metadataScan(input: $input) }", {"input": {"paths": [folder]}})
-        scanned = "; Stash is scanning %s" % folder
-        log("i", "Started a Stash scan of %s" % folder)
+        folder = stash_folder_for(stash, new_path, pairs, log)
+        if folder:
+            stash.gql("mutation ($input: ScanMetadataInput!) { metadataScan(input: $input) }", {"input": {"paths": [folder]}})
+            scanned = "; Stash is scanning %s" % folder
+            log("i", "Started a Stash scan of %s" % folder)
+        else:
+            scanned = "; couldn't work out where Stash sees %s, so no scan was started (add a path mapping)" % new_path
+            log("w", "No Stash folder found for %s; add a path mapping for Whisparr's root folder" % new_path)
     progress(1.0)
     return "Imported %s into Whisparr as %s%s" % (stash_path, movie.get("title"), scanned)
