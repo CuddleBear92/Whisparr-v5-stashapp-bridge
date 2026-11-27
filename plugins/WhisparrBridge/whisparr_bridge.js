@@ -887,12 +887,29 @@
   // Hook into Stash pages
   // ---------------------------------------------------------------------------
 
-  PluginApi.patch.after("PerformerDetailsPanel", function (props, result) {
+  // Stash calls an "after" patch with every argument React passed the component
+  // (props plus React's second argument), then the rendered result last. So the
+  // result is always the final argument, not necessarily the second.
+  function afterPatch(component, fn) {
+    PluginApi.patch.after(component, function () {
+      const args = Array.prototype.slice.call(arguments);
+      const result = args[args.length - 1];
+      const props = args.length > 1 ? args[0] : null;
+      try {
+        return fn(props, result);
+      } catch (err) {
+        console.error("[WhisparrBridge] patch for " + component + " failed", err);
+        return result;
+      }
+    });
+  }
+
+  afterPatch("PerformerDetailsPanel", function (props, result) {
     if (!props || !props.performer) return result;
     return h(Fragment, null, result, h(WhisparrPanel, { key: "wb-" + props.performer.id, kind: "performer", entity: props.performer }));
   });
 
-  PluginApi.patch.after("StudioDetailsPanel", function (props, result) {
+  afterPatch("StudioDetailsPanel", function (props, result) {
     if (!props || !props.studio) return result;
     return h(Fragment, null, result, h(WhisparrPanel, { key: "wb-" + props.studio.id, kind: "studio", entity: props.studio }));
   });
@@ -914,11 +931,11 @@
     return h(Nav.Item, null, h(Nav.Link, { eventKey: "whisparr-bridge-panel" }, "Whisparr"));
   }
 
-  PluginApi.patch.after("ScenePage.Tabs", function (props, result) {
+  afterPatch("ScenePage.Tabs", function (props, result) {
     return h(Fragment, null, result, h(SceneTabNav, { key: "wb-scene-tab" }));
   });
 
-  PluginApi.patch.after("ScenePage.TabContent", function (props, result) {
+  afterPatch("ScenePage.TabContent", function (props, result) {
     if (!props || !props.scene) return result;
     return h(
       Fragment,
